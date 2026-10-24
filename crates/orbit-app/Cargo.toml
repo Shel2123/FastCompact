@@ -1,0 +1,13 @@
+[package]
+name = "orbit-app"
+description = "Orbit application layer: controller, state, events, effects and ports."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+orbit-domain.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,1 @@
+//! Target resolution thread.

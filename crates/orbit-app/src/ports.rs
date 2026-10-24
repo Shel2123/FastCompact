@@ -1,0 +1,1 @@
+//! Contracts for external capabilities.

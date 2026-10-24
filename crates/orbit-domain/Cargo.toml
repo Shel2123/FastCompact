@@ -1,0 +1,10 @@
+[package]
+name = "orbit-domain"
+description = "Orbit domain model and pure logic: targets, actions, operations, menu geometry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
