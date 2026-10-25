@@ -62,6 +62,7 @@ objc2-core-foundation = { workspace = true, features = [
 objc2-core-graphics = { workspace = true, features = [
     "std",
     "CGEvent",
+    "CGEventSource",
     "CGEventTypes",
     "CGRemoteOperation",
 ] }
@@ -69,8 +70,11 @@ objc2-foundation = { workspace = true, features = [
     "std",
     "NSArray",
     "NSBundle",
+    "NSData",
     "NSEnumerator",
+    "NSError",
     "NSGeometry",
+    "NSJSONSerialization",
     "NSString",
 ] }
 tracing.workspace = true

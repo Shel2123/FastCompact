@@ -1,7 +1,8 @@
-//! Resolver thread: system-wide AX hit-test at a fixed point, then an
-//! attribute walk from the hit element towards the window.
+//! Resolver thread. Cursor mode: system-wide AX hit-test at a fixed point,
+//! then an attribute walk from the hit element towards the window. Selection
+//! mode is in `selection.rs` and runs on the same thread.
 //!
-//! `AXUIElement` is not `Send`, so both phases run on this thread and only
+//! `AXUIElement` is not `Send`, so all AX work runs on this thread and only
 //! plain Rust values are sent back.
 
 use std::fmt;
@@ -12,12 +13,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use objc2_application_services::{AXError, AXUIElement};
-use objc2_core_foundation::{CFBoolean, CFRetained, CFString, CFType, CFURL};
+use objc2_core_foundation::{CFArray, CFBoolean, CFRetained, CFString, CFType, CFURL};
 use tracing::{error, info};
 
-/// Request from the main thread. `point` is in Quartz global coordinates and
-/// never changes after the hotkey press.
-pub struct Request {
+use crate::applescript;
+use crate::selection;
+
+pub enum Request {
+    Cursor(CursorRequest),
+    Selection(selection::Request),
+    Verify(selection::Verify),
+}
+
+/// Cursor-mode request. `point` is in Quartz global coordinates and never
+/// changes after the hotkey press.
+pub struct CursorRequest {
     pub session: u64,
     pub point: (f64, f64),
     pub finder_pids: Vec<i32>,
@@ -39,6 +49,14 @@ pub enum Event {
         resolution: Resolution,
         elapsed: Duration,
     },
+    /// Selection mode: the selection was read once for this gesture.
+    Selected {
+        session: u64,
+        finder_pid: i32,
+        outcome: selection::Outcome,
+        snapshot: selection::Snapshot,
+        elapsed: Duration,
+    },
 }
 
 #[derive(Debug)]
@@ -51,14 +69,19 @@ pub struct Hit {
 #[derive(Debug)]
 #[expect(dead_code, reason = "fields are only logged through Debug")]
 pub enum Resolution {
-    Resolved { path: PathBuf, depth: usize },
+    Resolved { path: PathBuf, source: String },
+    Ambiguous(Vec<PathBuf>),
     Unsupported(String),
     PermissionDenied,
 }
 
 /// Walk at most this many levels above the hit element.
-const MAX_DEPTH: usize = 12;
-const MESSAGING_TIMEOUT_SECS: f32 = 0.5;
+pub(crate) const MAX_DEPTH: usize = 12;
+/// Search at most this many levels below the item root.
+const MAX_DESCENT: usize = 3;
+/// Inspect at most this many descendants of the item root.
+pub(crate) const MAX_DESCENDANTS: usize = 40;
+pub(crate) const MESSAGING_TIMEOUT_SECS: f32 = 0.5;
 
 /// Roles that hold many items. Reaching one without a file URL means the
 /// point is not over a single item.
@@ -74,6 +97,9 @@ const CONTAINER_ROLES: &[&str] = &[
     "AXWindow",
 ];
 
+/// Item roots whose descendants may be searched for the file URL.
+const ITEM_ROOT_ROLES: &[&str] = &["AXRow"];
+
 /// Attributes logged for every element of the walk.
 const DUMP_ATTRIBUTES: &[&str] = &[
     "AXSubrole",
@@ -87,7 +113,10 @@ const DUMP_ATTRIBUTES: &[&str] = &[
     "AXSelected",
 ];
 
-pub fn spawn(sink: impl Fn(Event) + Send + 'static) -> mpsc::Sender<Request> {
+pub fn spawn(
+    sink: impl Fn(Event) + Send + 'static,
+    checker: Option<applescript::Checker>,
+) -> mpsc::Sender<Request> {
     let (sender, receiver) = mpsc::channel::<Request>();
     let spawned = thread::Builder::new()
         .name("orbit-spike-resolver".into())
@@ -100,7 +129,13 @@ pub fn spawn(sink: impl Fn(Event) + Send + 'static) -> mpsc::Sender<Request> {
                 error!(?err, "set_messaging_timeout failed");
             }
             for request in receiver {
-                resolve(&system, &request, &sink);
+                match request {
+                    Request::Cursor(request) => resolve(&system, &request, &sink),
+                    Request::Selection(request) => {
+                        selection::resolve(&request, &sink, checker.as_ref());
+                    }
+                    Request::Verify(request) => selection::verify(&request),
+                }
             }
         });
     if let Err(err) = spawned {
@@ -109,7 +144,7 @@ pub fn spawn(sink: impl Fn(Event) + Send + 'static) -> mpsc::Sender<Request> {
     sender
 }
 
-fn resolve(system: &AXUIElement, request: &Request, sink: &impl Fn(Event)) {
+fn resolve(system: &AXUIElement, request: &CursorRequest, sink: &impl Fn(Event)) {
     let session = request.session;
     thread::sleep(request.hit_delay);
 
@@ -159,12 +194,14 @@ fn resolve(system: &AXUIElement, request: &Request, sink: &impl Fn(Event)) {
     });
 }
 
-/// Logs the chain from the hit element upwards and picks the first own file
-/// URL found below any container.
+/// Logs the chain from the hit element upwards, then looks for a file URL
+/// on the item under the cursor: first on the chain itself, then, when the
+/// item root (the top-most element below the first container) is a row,
+/// among its descendants. Nothing above the item root is ever used.
 fn walk(session: u64, hit: CFRetained<AXUIElement>) -> Resolution {
+    let mut item_chain = Vec::new();
+    let mut container: Option<(Option<String>, usize)> = None;
     let mut current = Some(hit);
-    let mut found = None;
-    let mut stop = None;
     for depth in 0..MAX_DEPTH {
         let Some(element) = current.take() else {
             break;
@@ -174,23 +211,23 @@ fn walk(session: u64, hit: CFRetained<AXUIElement>) -> Resolution {
             Ok(value) => value.and_then(|v| v.downcast_ref::<CFString>().map(|s| s.to_string())),
             Err(_) => None,
         };
-        let attributes: Vec<String> = DUMP_ATTRIBUTES
-            .iter()
-            .filter_map(|name| match attribute(&element, name) {
-                Ok(Some(value)) => Some(format!("{name}={}", Describe(&value))),
-                Ok(None) => None,
-                Err(err) => Some(format!("{name}=<{err:?}>")),
-            })
-            .collect();
-        info!(session, depth, role = ?role, attrs = %attributes.join(" "), "ax element");
-
-        if found.is_none() && stop.is_none() {
-            if let Some(path) = file_url_attribute(&element, "AXURL") {
-                found = Some(Resolution::Resolved { path, depth });
-            } else if let Some(role) = role.as_deref().filter(|r| CONTAINER_ROLES.contains(r)) {
-                stop = Some(format!(
-                    "reached container {role} at depth {depth} without a file URL"
-                ));
+        let is_container = role
+            .as_deref()
+            .is_some_and(|role| CONTAINER_ROLES.contains(&role));
+        let below_container = container.is_none() && !is_container;
+        log_element(
+            session,
+            "up",
+            depth,
+            &element,
+            role.as_deref(),
+            below_container,
+        );
+        if container.is_none() {
+            if is_container {
+                container = Some((role.clone(), depth));
+            } else {
+                item_chain.push(element.clone());
             }
         }
         if role.as_deref() == Some("AXApplication") {
@@ -198,9 +235,109 @@ fn walk(session: u64, hit: CFRetained<AXUIElement>) -> Resolution {
         }
         current = parent(&element);
     }
-    found.unwrap_or_else(|| {
-        Resolution::Unsupported(stop.unwrap_or_else(|| "no file URL in the chain".to_owned()))
-    })
+
+    for (depth, element) in item_chain.iter().enumerate() {
+        if let Some(path) = file_url_attribute(element, "AXURL") {
+            return Resolution::Resolved {
+                path,
+                source: format!("own AXURL at depth {depth}"),
+            };
+        }
+    }
+
+    let Some(item_root) = item_chain.last() else {
+        return Resolution::Unsupported(format!("hit element is a container: {container:?}"));
+    };
+    // Only a row is known to stand for exactly one file. Other groups (for
+    // example the desktop's AXGroup) may hold many items.
+    let root_role = string_attribute(item_root, "AXRole");
+    if !root_role
+        .as_deref()
+        .is_some_and(|role| ITEM_ROOT_ROLES.contains(&role))
+    {
+        // Diagnostic only: log what the group holds, never use it as a target.
+        let mut seen = Vec::new();
+        let mut budget = MAX_DESCENDANTS;
+        collect_descendant_urls(session, item_root, 1, &mut budget, &mut seen);
+        return Resolution::Unsupported(format!(
+            "no own file URL and item root {root_role:?} is not a row; \
+             container {container:?}; descendants hold {seen:?}"
+        ));
+    }
+    let mut paths = Vec::new();
+    let mut budget = MAX_DESCENDANTS;
+    collect_descendant_urls(session, item_root, 1, &mut budget, &mut paths);
+    let root_depth = item_chain.len() - 1;
+    match paths.len() {
+        0 => Resolution::Unsupported(format!(
+            "no file URL on item root (depth {root_depth}) or its descendants; container {container:?}"
+        )),
+        1 => Resolution::Resolved {
+            path: paths.remove(0),
+            source: format!("descendant AXURL of item root at depth {root_depth}"),
+        },
+        _ => Resolution::Ambiguous(paths),
+    }
+}
+
+/// Depth-first search below `element`, bounded by `MAX_DESCENT` levels and
+/// `budget` elements. Collects distinct file URLs.
+pub(crate) fn collect_descendant_urls(
+    session: u64,
+    element: &AXUIElement,
+    level: usize,
+    budget: &mut usize,
+    paths: &mut Vec<PathBuf>,
+) {
+    for child in children(element) {
+        if *budget == 0 {
+            info!(session, "descendant budget exhausted");
+            return;
+        }
+        *budget -= 1;
+        let role = string_attribute(&child, "AXRole");
+        log_element(session, "down", level, &child, role.as_deref(), true);
+        if let Some(path) = file_url_attribute(&child, "AXURL")
+            && !paths.contains(&path)
+        {
+            paths.push(path);
+        }
+        if level < MAX_DESCENT {
+            collect_descendant_urls(session, &child, level + 1, budget, paths);
+        }
+    }
+}
+
+pub(crate) fn log_element(
+    session: u64,
+    direction: &str,
+    depth: usize,
+    element: &AXUIElement,
+    role: Option<&str>,
+    with_names: bool,
+) {
+    let attributes: Vec<String> = DUMP_ATTRIBUTES
+        .iter()
+        .filter_map(|name| match attribute(element, name) {
+            Ok(Some(value)) => Some(format!("{name}={}", Describe(&value))),
+            Ok(None) => None,
+            Err(err) => Some(format!("{name}=<{err:?}>")),
+        })
+        .collect();
+    let names = if with_names {
+        attribute_names(element).join(",")
+    } else {
+        String::new()
+    };
+    info!(
+        session,
+        direction,
+        depth,
+        role = ?role,
+        attrs = %attributes.join(" "),
+        names = %names,
+        "ax element"
+    );
 }
 
 fn element_at(
@@ -227,7 +364,10 @@ fn element_pid(element: &AXUIElement) -> Option<i32> {
 }
 
 /// Returns `Ok(None)` when the element has no value for `name`.
-fn attribute(element: &AXUIElement, name: &str) -> Result<Option<CFRetained<CFType>>, AXError> {
+pub(crate) fn attribute(
+    element: &AXUIElement,
+    name: &str,
+) -> Result<Option<CFRetained<CFType>>, AXError> {
     let name = CFString::from_str(name);
     let mut out: *const CFType = ptr::null();
     // SAFETY: `out` is a valid place for the returned value.
@@ -242,17 +382,58 @@ fn attribute(element: &AXUIElement, name: &str) -> Result<Option<CFRetained<CFTy
     Ok(NonNull::new(out.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) }))
 }
 
-fn string_attribute(element: &AXUIElement, name: &str) -> Option<String> {
+pub(crate) fn string_attribute(element: &AXUIElement, name: &str) -> Option<String> {
     let value = attribute(element, name).ok()??;
     value.downcast_ref::<CFString>().map(|s| s.to_string())
 }
 
-fn file_url_attribute(element: &AXUIElement, name: &str) -> Option<PathBuf> {
+pub(crate) fn file_url_attribute(element: &AXUIElement, name: &str) -> Option<PathBuf> {
     let value = attribute(element, name).ok()??;
     value.downcast_ref::<CFURL>()?.to_file_path()
 }
 
-fn parent(element: &AXUIElement) -> Option<CFRetained<AXUIElement>> {
+fn children(element: &AXUIElement) -> Vec<CFRetained<AXUIElement>> {
+    element_array(element, "AXChildren")
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Reads an attribute that holds an array of elements, such as `AXChildren`
+/// or `AXSelectedRows`. `Ok(None)` when the element has no such value.
+pub(crate) fn element_array(
+    element: &AXUIElement,
+    name: &str,
+) -> Result<Option<Vec<CFRetained<AXUIElement>>>, AXError> {
+    let Some(value) = attribute(element, name)? else {
+        return Ok(None);
+    };
+    if value.downcast_ref::<CFArray>().is_none() {
+        return Err(AXError::IllegalArgument);
+    }
+    // SAFETY: checked to be a CFArray above; these attributes hold AXUIElements.
+    let array = unsafe { CFRetained::cast_unchecked::<CFArray<AXUIElement>>(value) };
+    Ok(Some(array.to_vec()))
+}
+
+fn attribute_names(element: &AXUIElement) -> Vec<String> {
+    let mut out: *const CFArray = ptr::null();
+    // SAFETY: `out` is a valid place for the returned array.
+    let err = unsafe { element.copy_attribute_names(NonNull::from(&mut out)) };
+    if err != AXError::Success {
+        return vec![format!("<{err:?}>")];
+    }
+    let Some(array) = NonNull::new(out.cast_mut()) else {
+        return Vec::new();
+    };
+    // SAFETY: the Copy rule gives us a +1 reference.
+    let array: CFRetained<CFArray> = unsafe { CFRetained::from_raw(array) };
+    // SAFETY: attribute names are CFStrings.
+    let array = unsafe { CFRetained::cast_unchecked::<CFArray<CFString>>(array) };
+    array.iter().map(|name| name.to_string()).collect()
+}
+
+pub(crate) fn parent(element: &AXUIElement) -> Option<CFRetained<AXUIElement>> {
     let value = attribute(element, "AXParent").ok()??;
     // SAFETY: AXParent always holds an AXUIElement.
     Some(unsafe { CFRetained::cast_unchecked::<AXUIElement>(value) })

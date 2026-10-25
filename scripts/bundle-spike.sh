@@ -4,11 +4,15 @@
 # Usage: scripts/bundle-spike.sh [--build-only]
 #
 # Environment:
-#   ORBIT_SIGN_IDENTITY        codesign identity (default "-", ad-hoc)
-#   ORBIT_SPIKE_HIT_DELAY_MS   delay before the AX hit-test
-#   ORBIT_SPIKE_ATTR_DELAY_MS  delay between hit-test and attribute walk
-#   ORBIT_SPIKE_BLOCK_MAIN_MS  block the main thread this long every 6 s
-#   ORBIT_SPIKE_POINT          "tap" to use the event-tap location
+#   ORBIT_SIGN_IDENTITY          codesign identity (default "-", ad-hoc)
+#   ORBIT_SPIKE_MODE             "selection" (default) or "cursor"
+#   ORBIT_SPIKE_SELECT_DELAY_MS  delay before the selection read
+#   ORBIT_SPIKE_APPLESCRIPT      "0" disables the JXA cross-check
+#   ORBIT_SPIKE_TAP              "1" starts the event tap (Input Monitoring)
+#   ORBIT_SPIKE_HIT_DELAY_MS     cursor mode: delay before the AX hit-test
+#   ORBIT_SPIKE_ATTR_DELAY_MS    cursor mode: delay between hit-test and walk
+#   ORBIT_SPIKE_BLOCK_MAIN_MS    block the main thread this long every 6 s
+#   ORBIT_SPIKE_POINT            "tap" to use the event-tap location
 # All ORBIT_SPIKE_* variables are passed to the app through `open --env`.
 set -euo pipefail
 

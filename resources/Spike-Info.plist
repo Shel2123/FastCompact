@@ -16,5 +16,7 @@
 	<string>1</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Orbit Spike asks Finder for its selection to cross-check the Accessibility read.</string>
 </dict>
 </plist>

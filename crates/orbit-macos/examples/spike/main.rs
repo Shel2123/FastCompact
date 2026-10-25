@@ -1,12 +1,15 @@
-//! Stage 0 spike: Accessibility trust, hit-testing the Finder item under the
-//! cursor, and the hold-hotkey input route with a non-activating panel.
+//! Stage 0 spike: Accessibility trust, reading the Finder target (the
+//! selected item by default, the item under the cursor in cursor mode), and
+//! the hold-hotkey input route with a non-activating panel.
 //!
 //! Throwaway code, not part of any public API. Build and launch it as a signed
 //! bundle with `scripts/bundle-spike.sh`; results go to
 //! `~/Library/Logs/Orbit/spike.log`. See `docs/spike-0.md` for the scenarios.
 
+mod applescript;
 mod ax;
 mod panel;
+mod selection;
 mod tap;
 
 use std::cell::RefCell;
@@ -23,9 +26,9 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventMask, NSMenu, NSMenuItem,
-    NSRunningApplication, NSScreen, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
-    NSWorkspace,
+    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventMask, NSEventModifierFlags,
+    NSMenu, NSMenuItem, NSRunningApplication, NSScreen, NSStatusBar, NSStatusItem,
+    NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFRetained, CFString};
 use objc2_core_graphics::CGEvent;
@@ -40,6 +43,8 @@ const BUILD: &str = match option_env!("ORBIT_SPIKE_BUILD") {
     Some(build) => build,
     None => "dev",
 };
+/// A tap key-down older than this is not taken as the current press.
+const TAP_PRESS_MAX_AGE: Duration = Duration::from_secs(1);
 
 fn main() {
     if let Err(err) = init_logging() {
@@ -58,10 +63,22 @@ fn main() {
 /// (passed through `open --env` by the bundle script).
 #[derive(Debug)]
 struct Config {
+    mode: Mode,
     hit_delay: Duration,
     attr_delay: Duration,
+    select_delay: Duration,
     block_main: Duration,
     point_source: PointSource,
+    tap: bool,
+    applescript: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Target = the one selected item in the focused Finder file area.
+    Selection,
+    /// Target = the item under the cursor (fast mode groundwork).
+    Cursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,15 +97,24 @@ impl Config {
                 .and_then(|value| value.parse::<u64>().ok())
                 .map_or(Duration::ZERO, Duration::from_millis)
         };
-        let point_source = match std::env::var("ORBIT_SPIKE_POINT").as_deref() {
-            Ok("tap") => PointSource::Tap,
+        let var = |name: &str| std::env::var(name).ok();
+        let mode = match var("ORBIT_SPIKE_MODE").as_deref() {
+            Some("cursor") => Mode::Cursor,
+            _ => Mode::Selection,
+        };
+        let point_source = match var("ORBIT_SPIKE_POINT").as_deref() {
+            Some("tap") => PointSource::Tap,
             _ => PointSource::Handler,
         };
         Self {
+            mode,
             hit_delay: millis("ORBIT_SPIKE_HIT_DELAY_MS"),
             attr_delay: millis("ORBIT_SPIKE_ATTR_DELAY_MS"),
+            select_delay: millis("ORBIT_SPIKE_SELECT_DELAY_MS"),
             block_main: millis("ORBIT_SPIKE_BLOCK_MAIN_MS"),
             point_source,
+            tap: point_source == PointSource::Tap || var("ORBIT_SPIKE_TAP").as_deref() == Some("1"),
+            applescript: var("ORBIT_SPIKE_APPLESCRIPT").as_deref() != Some("0"),
         }
     }
 }
@@ -152,7 +178,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
 
     info!(trusted = ax_trusted_with_prompt(), "accessibility trust");
 
-    if config.point_source == PointSource::Tap {
+    if config.tap {
         tap::spawn();
     }
 
@@ -166,13 +192,24 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
         .register(invoke)
         .map_err(|err| format!("register Ctrl+Option+Space: {err}"))?;
 
-    let resolver = ax::spawn(|event| {
-        DispatchQueue::main().exec_async(move || with_spike(|spike| spike.on_resolver(event)));
-    });
+    let checker = match (config.mode, config.applescript) {
+        (Mode::Selection, true) => applescript::Checker::spawn(),
+        _ => None,
+    };
+    let resolver = ax::spawn(
+        |event| {
+            DispatchQueue::main().exec_async(move || with_spike(|spike| spike.on_resolver(event)));
+        },
+        checker,
+    );
 
     let mouse_monitor = mouse_monitor();
     if mouse_monitor.is_none() {
         warn!("global mouse-moved monitor was not installed");
+    }
+    let flags_monitor = flags_monitor();
+    if flags_monitor.is_none() {
+        warn!("global flags-changed monitor was not installed");
     }
 
     if !config.block_main.is_zero() {
@@ -192,6 +229,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
         config,
         _status_item: status_item,
         _mouse_monitor: mouse_monitor,
+        _flags_monitor: flags_monitor,
     };
     SPIKE.with(|cell| *cell.borrow_mut() = Some(spike));
 
@@ -205,7 +243,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
         with_spike(|spike| spike.on_hotkey(event, captured));
     }));
 
-    info!("running; hold Ctrl+Option+Space over a Finder item");
+    info!("running; select a Finder item (or point at it in cursor mode), hold Ctrl+Option+Space");
     app.run();
     Ok(())
 }
@@ -238,18 +276,23 @@ struct Spike {
     config: Config,
     _status_item: Retained<NSStatusItem>,
     _mouse_monitor: Option<Retained<AnyObject>>,
+    _flags_monitor: Option<Retained<AnyObject>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 enum Gesture {
     Idle,
-    HitTesting {
+    /// Waiting for the hit-test (cursor mode) or the selection read.
+    Pending {
         session: u64,
         cocoa_point: NSPoint,
         pressed_at: Instant,
     },
     Open {
         session: u64,
+        /// The target fixed for the whole gesture; `None` in cursor mode,
+        /// where the resolution is only logged.
+        target: Option<PathBuf>,
     },
 }
 
@@ -282,7 +325,7 @@ impl Spike {
         if event.id == self.invoke.id() {
             match event.state {
                 HotKeyState::Pressed => self.on_pressed(captured),
-                HotKeyState::Released => self.on_released(),
+                HotKeyState::Released => self.on_released("space"),
             }
         } else if let Some(escape) = self.escapes.iter().find(|hk| hk.id() == event.id) {
             if event.state == HotKeyState::Pressed {
@@ -304,14 +347,17 @@ impl Spike {
 
         let primary_height = primary_screen_height(self.mtm);
         let converted = primary_height.map(|h| (captured.quartz.0, h - captured.quartz.1));
-        let tap_press = tap::take_press();
+        let tap_press = tap::take_press()
+            .filter(|press| captured.at.duration_since(press.seen_at) < TAP_PRESS_MAX_AGE);
+        let frontmost = frontmost_app();
         info!(
             session,
+            mode = ?self.config.mode,
             quartz = ?captured.quartz,
             cocoa = ?captured.cocoa,
             cocoa_from_quartz = ?converted,
             tap = ?tap_press.map(|press| (press.point, captured.at.duration_since(press.seen_at))),
-            frontmost = ?frontmost_bundle_id(),
+            ?frontmost,
             "pressed"
         );
 
@@ -332,41 +378,66 @@ impl Spike {
             ),
         };
 
-        let request = ax::Request {
-            session,
-            point,
-            finder_pids: running_pids(FINDER_BUNDLE_ID),
-            hit_delay: self.config.hit_delay,
-            attr_delay: self.config.attr_delay,
+        let request = match self.config.mode {
+            Mode::Cursor => ax::Request::Cursor(ax::CursorRequest {
+                session,
+                point,
+                finder_pids: running_pids(FINDER_BUNDLE_ID),
+                hit_delay: self.config.hit_delay,
+                attr_delay: self.config.attr_delay,
+            }),
+            Mode::Selection => {
+                let finder_pid = frontmost
+                    .as_ref()
+                    .filter(|(bundle_id, _)| bundle_id.as_deref() == Some(FINDER_BUNDLE_ID))
+                    .map(|(_, pid)| *pid);
+                let Some(finder_pid) = finder_pid else {
+                    info!(session, "refused: Finder is not frontmost; no panel");
+                    return;
+                };
+                ax::Request::Selection(selection::Request {
+                    session,
+                    finder_pid,
+                    pressed_at: tap_press.map_or(captured.at, |press| press.seen_at),
+                    delay: self.config.select_delay,
+                })
+            }
         };
         if self.resolver.send(request).is_err() {
             error!(session, "resolver thread is gone");
             return;
         }
-        self.gesture = Gesture::HitTesting {
+        self.gesture = Gesture::Pending {
             session,
             cocoa_point,
             pressed_at: captured.at,
         };
     }
 
-    fn on_released(&mut self) {
-        match self.gesture {
-            Gesture::Idle => info!("released while idle; ignored"),
-            Gesture::HitTesting { session, .. } => {
-                info!(session, "released before hit-test finished; gesture closed");
-                self.close("released");
+    /// Ends the gesture. `cause` is the key that was let go: the hotkey's
+    /// Space (Carbon `Released`) or one of its modifiers.
+    fn on_released(&mut self, cause: &str) {
+        match &self.gesture {
+            Gesture::Idle => {
+                info!(cause, "released while idle; ignored");
+                return;
             }
-            Gesture::Open { session } => {
+            Gesture::Pending { session, .. } => {
                 info!(
                     session,
-                    sector = ?self.panel.selected(),
-                    frontmost = ?frontmost_bundle_id(),
-                    "released"
+                    cause, "released before the target was read; gesture closed"
                 );
-                self.close("released");
             }
+            Gesture::Open { session, target } => info!(
+                session,
+                ?target,
+                cause,
+                sector = ?self.panel.selected(),
+                frontmost = ?frontmost_bundle_id(),
+                "released"
+            ),
         }
+        self.close("released");
     }
 
     fn on_resolver(&mut self, event: ax::Event) {
@@ -376,7 +447,7 @@ impl Spike {
                 result,
                 elapsed,
             } => match self.gesture {
-                Gesture::HitTesting {
+                Gesture::Pending {
                     session: current,
                     cocoa_point,
                     pressed_at,
@@ -391,7 +462,7 @@ impl Spike {
                                 ?since_press,
                                 "hit-test ok; showing panel"
                             );
-                            self.open(session, cocoa_point);
+                            self.open(session, cocoa_point, None);
                         }
                         Err(reason) => {
                             info!(session, %reason, ?elapsed, "hit-test rejected; no panel");
@@ -406,23 +477,56 @@ impl Spike {
                 resolution,
                 elapsed,
             } => {
-                let current = matches!(self.gesture, Gesture::Open { session: s } if s == session);
+                let current =
+                    matches!(self.gesture, Gesture::Open { session: s, .. } if s == session);
                 info!(session, ?resolution, ?elapsed, current, "resolution");
             }
+            ax::Event::Selected {
+                session,
+                finder_pid,
+                outcome,
+                snapshot,
+                elapsed,
+            } => match self.gesture {
+                Gesture::Pending {
+                    session: current,
+                    cocoa_point,
+                    pressed_at,
+                } if current == session => {
+                    let since_press = pressed_at.elapsed();
+                    info!(session, %outcome, ?snapshot, ?elapsed, ?since_press, "selection");
+                    let selection::Outcome::Resolved(path) = outcome else {
+                        info!(session, "refused: not exactly one selected file; no panel");
+                        self.gesture = Gesture::Idle;
+                        return;
+                    };
+                    self.open(session, cocoa_point, Some(path));
+                    let verify = ax::Request::Verify(selection::Verify {
+                        session,
+                        finder_pid,
+                        expected: snapshot,
+                    });
+                    if self.resolver.send(verify).is_err() {
+                        error!(session, "resolver thread is gone");
+                    }
+                }
+                _ => info!(session, %outcome, gesture = ?self.gesture, "stale selection ignored"),
+            },
         }
     }
 
-    fn open(&mut self, session: u64, cocoa_point: NSPoint) {
+    fn open(&mut self, session: u64, cocoa_point: NSPoint, target: Option<PathBuf>) {
         let center = self.panel.show(self.mtm, cocoa_point);
         info!(
             session,
+            ?target,
             ?cocoa_point,
             ?center,
             frontmost = ?frontmost_bundle_id(),
             "panel shown"
         );
         self.register_escapes();
-        self.gesture = Gesture::Open { session };
+        self.gesture = Gesture::Open { session, target };
     }
 
     fn close(&mut self, reason: &str) {
@@ -461,6 +565,20 @@ impl Spike {
             self.panel.track(cursor);
         }
     }
+
+    fn on_flags_changed(&mut self, flags: NSEventModifierFlags) {
+        if matches!(self.gesture, Gesture::Idle) {
+            return;
+        }
+        let control = flags.contains(NSEventModifierFlags::Control);
+        let option = flags.contains(NSEventModifierFlags::Option);
+        info!(control, option, gesture = ?self.gesture, "modifiers changed");
+        // Carbon reports `Released` only when Space goes up, so letting go of
+        // a modifier first must end the gesture here.
+        if !(control && option) {
+            self.on_released("modifier");
+        }
+    }
 }
 
 /// Esc with every modifier combination the user can hold during the gesture.
@@ -479,6 +597,16 @@ fn mouse_monitor() -> Option<Retained<AnyObject>> {
         with_spike(|spike| spike.on_mouse_moved(cursor));
     });
     NSEvent::addGlobalMonitorForEventsMatchingMask_handler(NSEventMask::MouseMoved, &handler)
+}
+
+/// Logs modifier changes during a gesture, so the release order of the
+/// hotkey keys can be read from the log (scenarios 7a and 8).
+fn flags_monitor() -> Option<Retained<AnyObject>> {
+    let handler = block2::RcBlock::new(|_event| {
+        let flags = NSEvent::modifierFlags_class();
+        with_spike(|spike| spike.on_flags_changed(flags));
+    });
+    NSEvent::addGlobalMonitorForEventsMatchingMask_handler(NSEventMask::FlagsChanged, &handler)
 }
 
 /// Blocks the main thread periodically to delay hotkey delivery (scenario 6b).
@@ -547,10 +675,14 @@ fn other_instances() -> Vec<i32> {
 }
 
 fn frontmost_bundle_id() -> Option<String> {
-    NSWorkspace::sharedWorkspace()
-        .frontmostApplication()
-        .and_then(|app| app.bundleIdentifier())
-        .map(|id| id.to_string())
+    frontmost_app().and_then(|(bundle_id, _)| bundle_id)
+}
+
+/// Bundle id and pid of the frontmost application.
+fn frontmost_app() -> Option<(Option<String>, i32)> {
+    let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    let bundle_id = app.bundleIdentifier().map(|id| id.to_string());
+    Some((bundle_id, app.processIdentifier()))
 }
 
 fn primary_screen_height(mtm: MainThreadMarker) -> Option<f64> {
