@@ -70,6 +70,10 @@ struct Config {
     block_main: Duration,
     point_source: PointSource,
     tap: bool,
+    /// Delay the tap applies before recording an input (scenario F3).
+    tap_delay: Duration,
+    /// Marker of the fence guard (scenarios F2, F3).
+    fence: Option<tap::FenceKind>,
     applescript: bool,
 }
 
@@ -106,6 +110,18 @@ impl Config {
             Some("tap") => PointSource::Tap,
             _ => PointSource::Handler,
         };
+        let fence_var = var("ORBIT_SPIKE_FENCE");
+        let fence = match fence_var.as_deref() {
+            Some("off") => None,
+            Some("move") => Some(tap::FenceKind::Move),
+            Some("null") => Some(tap::FenceKind::Null),
+            _ => Some(tap::FenceKind::Scroll),
+        };
+        let tap_delay = millis("ORBIT_SPIKE_TAP_DELAY_MS");
+        let tap = point_source == PointSource::Tap
+            || var("ORBIT_SPIKE_TAP").as_deref() == Some("1")
+            || fence_var.is_some_and(|value| value != "off")
+            || !tap_delay.is_zero();
         Self {
             mode,
             hit_delay: millis("ORBIT_SPIKE_HIT_DELAY_MS"),
@@ -113,7 +129,9 @@ impl Config {
             select_delay: millis("ORBIT_SPIKE_SELECT_DELAY_MS"),
             block_main: millis("ORBIT_SPIKE_BLOCK_MAIN_MS"),
             point_source,
-            tap: point_source == PointSource::Tap || var("ORBIT_SPIKE_TAP").as_deref() == Some("1"),
+            tap,
+            tap_delay,
+            fence,
             applescript: var("ORBIT_SPIKE_APPLESCRIPT").as_deref() != Some("0"),
         }
     }
@@ -179,7 +197,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
     info!(trusted = ax_trusted_with_prompt(), "accessibility trust");
 
     if config.tap {
-        tap::spawn();
+        tap::spawn(config.tap_delay, config.fence);
     }
 
     let app = NSApplication::sharedApplication(mtm);
@@ -323,6 +341,13 @@ impl Captured {
 
 impl Spike {
     fn on_hotkey(&mut self, event: GlobalHotKeyEvent, captured: Captured) {
+        // Scenario F1: compare with the "tap key" lines of the same press.
+        let which = if event.id == self.invoke.id() {
+            "invoke"
+        } else {
+            "escape"
+        };
+        info!(which, state = ?event.state, gesture = ?self.gesture, "carbon event");
         if event.id == self.invoke.id() {
             match event.state {
                 HotKeyState::Pressed => self.on_pressed(captured),
@@ -361,6 +386,19 @@ impl Spike {
             ?frontmost,
             "pressed"
         );
+        // Scenario F4: the tap point converted to Cocoa against the handler's
+        // Cocoa point. They differ only if the cursor moved in between.
+        if let (Some(press), Some(h)) = (tap_press, primary_height) {
+            let tap_cocoa = (press.point.0, h - press.point.1);
+            info!(
+                session,
+                ?tap_cocoa,
+                handler_cocoa = ?captured.cocoa,
+                delta = ?(tap_cocoa.0 - captured.cocoa.0, tap_cocoa.1 - captured.cocoa.1),
+                tap_age = ?captured.at.duration_since(press.seen_at),
+                "point check"
+            );
+        }
 
         let (point, cocoa_point) = match (self.config.point_source, tap_press, primary_height) {
             (PointSource::Tap, Some(press), Some(h)) => {
@@ -400,7 +438,9 @@ impl Spike {
                     session,
                     finder_pid,
                     pressed_at: tap_press.map_or(captured.at, |press| press.seen_at),
+                    press_seq: tap_press.map(|press| press.seq),
                     delay: self.config.select_delay,
+                    fence: self.config.fence,
                 })
             }
         };

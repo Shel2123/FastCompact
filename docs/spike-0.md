@@ -47,6 +47,8 @@ tail -f ~/Library/Logs/Orbit/spike.log
 | `ORBIT_SPIKE_ATTR_DELAY_MS` | cursor: задержка между hit-test и обходом атрибутов (сценарий 6) |
 | `ORBIT_SPIKE_BLOCK_MAIN_MS` | каждые 6 с блокировать main на столько мс (сценарий 6b) |
 | `ORBIT_SPIKE_POINT=tap` | брать точку из key-down события `CGEventTap` (включает tap) |
+| `ORBIT_SPIKE_FENCE` | маркер забора: `scroll` (по умолчанию), `move`, `null`, `off`; любое значение кроме `off` включает tap (этап 4, F2/F3) |
+| `ORBIT_SPIKE_TAP_DELAY_MS` | tap ждёт столько мс перед записью каждого mouse-down/key-down (включает tap; F3) |
 
 ## Устройство
 - **Выделение (default).** При нажатии main проверяет, что frontmost — Finder; иначе отказ без панели. Поток resolver:
@@ -135,3 +137,24 @@ _Заполняется после прогона:_
 - поддерживаемые комбинации Esc;
 - длительность фаз;
 - способ подписи.
+
+## Шаг 0 этапа 4: F1–F4
+
+Проверки перед кодом продукта (план этапа 4): единственный источник событий жеста — tap, guard по номерам событий tap с забором (fence) вместо паузы. Сборка с Apple Development, как в сценарии 10.
+
+Забор: после AX-чтения resolver постит маркер (`kCGHIDEventTap`, `EventSourceUserData` = nonce) и ждёт до 500 мс, пока tap его обработает. Ввод с номером больше номера нажатия и меньше номера маркера → `Unstable`. Маркер не увиден → `Unstable`. Старый guard по времени (пауза 30 мс) работает параллельно; строка лога `guards` показывает оба вердикта: `fence=…` и `timed=…`.
+
+Строки лога: `tap key` (что видит tap), `carbon event` (что видит Carbon), `fence posted` / `fence seen by tap`, `guards`, `point check`.
+
+| # | Запуск и действия | Ожидание | Результат |
+|---|---|---|---|
+| F1 | `ORBIT_SPIKE_TAP=1`. Выделить файл, удержать хоткей 2 с, отпустить Space первым; повторить, отпуская Ctrl первым и Option первым; в удержании нажать Esc | на каждое нажатие `tap key` space KeyDown `autorepeat=false` раньше `carbon event invoke Pressed`; при удержании одна строка `autorepeat=true`; key-up Space и FlagsChanged (Ctrl/Option) видны в `tap key`; Esc KeyDown виден, хотя Carbon его поглощает | |
+| F1a | Там же: приходят ли повторные `carbon event invoke Pressed` при удержании | наблюдение | |
+| F2 | По очереди `ORBIT_SPIKE_FENCE=scroll`, `move`, `null`. Обычный жест в list, icons, columns, на рабочем столе. В list view с прокруткой — список не на верхней позиции | `fence seen by tap` с `latency` в единицы мс; выделение, прокрутка и курсор Finder не изменились; в `guards` `fence=clean`. Выбрать первый подходящий кандидат | |
+| F3 | `ORBIT_SPIKE_TAP_DELAY_MS=300 ORBIT_SPIKE_SELECT_DELAY_MS=3000` с выбранным маркером. Выделен A → нажатие → во время задержки клик по B; отдельно стрелка | `fence=inputs [...]` (клик/стрелка с номером меньше маркера) → `Unstable`, никогда B. `timed=` для сравнения: стрелку пропустит, если tap ещё спит | |
+| F3a | То же без клика | `fence=clean`, Resolved(A); `latency` ≈ задержка tap только если перед маркером в очереди был ввод | |
+| F3b | `TAP_DELAY_MS=300`, без `SELECT_DELAY`: щелчки мышью во время удержания | нет ли `event tap disabled` (отключение tap системой при медленном callback) | |
+| F4 | `ORBIT_SPIKE_TAP=1`, нажатие без движения мыши на разных мониторах | в `point check` `delta` ≈ (0, 0) | |
+
+Если F3 не подтвердится (клик B после маркера или Resolved(B)), этап 4 останавливается: обсуждаем active tap.
+

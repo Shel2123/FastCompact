@@ -13,6 +13,9 @@
 #   ORBIT_SPIKE_ATTR_DELAY_MS    cursor mode: delay between hit-test and walk
 #   ORBIT_SPIKE_BLOCK_MAIN_MS    block the main thread this long every 6 s
 #   ORBIT_SPIKE_POINT            "tap" to use the event-tap location
+#   ORBIT_SPIKE_FENCE            fence marker: "scroll" (default), "move", "null", "off";
+#                                anything but "off" starts the event tap
+#   ORBIT_SPIKE_TAP_DELAY_MS     tap waits this long before recording each input
 # All ORBIT_SPIKE_* variables are passed to the app through `open --env`.
 set -euo pipefail
 

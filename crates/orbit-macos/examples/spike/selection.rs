@@ -26,8 +26,13 @@ pub struct Request {
     /// Best known time of the hotkey press: the event tap's key-down when
     /// available, otherwise the hotkey handler.
     pub pressed_at: Instant,
+    /// Sequence number of the hotkey key-down in the tap's event order;
+    /// `None` when the tap did not record it.
+    pub press_seq: Option<u64>,
     /// Delay before the read (scenario D11).
     pub delay: Duration,
+    /// Marker for the fence guard; `None` disables it.
+    pub fence: Option<tap::FenceKind>,
 }
 
 /// Second read after the panel is shown, to check that the panel changes
@@ -95,8 +100,11 @@ impl Snapshot {
 }
 
 /// Wait this long after the read before checking for input, so that events
-/// that happened during the read have reached the event tap.
+/// that happened during the read have reached the event tap. Kept only to
+/// compare with the fence guard: a pause proves nothing (stage 4, F3).
 const GUARD_GRACE: Duration = Duration::from_millis(30);
+/// Longest wait for the tap to handle the fence marker.
+const FENCE_TIMEOUT: Duration = Duration::from_millis(500);
 /// Delay before the verification read, so the panel is on screen.
 const VERIFY_DELAY: Duration = Duration::from_millis(100);
 /// Read the paths of at most this many selected items.
@@ -112,13 +120,21 @@ pub fn resolve(request: &Request, sink: &impl Fn(Event), checker: Option<&apples
     let (outcome, snapshot) = read(session, request.finder_pid, "read");
     let elapsed = started.elapsed();
 
+    // The fence goes first: it must follow the read immediately.
+    let fence = fence_guard(session, request);
     thread::sleep(GUARD_GRACE);
-    let outcome = match input_after(session, request.pressed_at) {
-        Some(inputs) => {
-            info!(session, read = %outcome, %inputs, "input during read; selection rejected");
-            Outcome::Unstable(inputs)
-        }
-        None => outcome,
+    let timed = input_after(session, request.pressed_at);
+    info!(
+        session,
+        read = %outcome,
+        fence = %fence,
+        timed = timed.as_deref().unwrap_or("clean"),
+        "guards"
+    );
+    let outcome = match (fence.rejects(), timed) {
+        (true, _) => Outcome::Unstable(format!("fence: {fence}")),
+        (false, Some(inputs)) => Outcome::Unstable(format!("timed: {inputs}")),
+        (false, None) => outcome,
     };
     let comparable = snapshot.comparable_paths(&outcome);
     sink(Event::Selected {
@@ -411,6 +427,90 @@ fn element_attribute(element: &AXUIElement, name: &str) -> Option<CFRetained<AXU
     let value = ax::attribute(element, name).ok()??;
     // SAFETY: only called for attributes that hold an AXUIElement.
     Some(unsafe { CFRetained::cast_unchecked::<AXUIElement>(value) })
+}
+
+/// Result of the fence guard (stage 4, F2/F3).
+enum Fence {
+    /// Disabled by configuration.
+    Off,
+    /// The tap is not running, so there is nothing to fence.
+    NoTap,
+    /// The tap did not record the key-down of this press.
+    NoPress,
+    /// The marker could not be posted.
+    PostFailed(String),
+    /// The tap did not handle the marker in time.
+    TimedOut { nonce: i64 },
+    /// No input and no interruption between the press and the marker.
+    Clean(tap::FenceSnapshot),
+    /// Input between the press and the marker.
+    Inputs(tap::FenceSnapshot, Vec<tap::TapInput>),
+    /// The tap was disabled between the press and the marker.
+    Interrupted(tap::FenceSnapshot),
+}
+
+impl Fence {
+    /// Whether the selection must be rejected. Only `Clean` confirms it;
+    /// `Off` and `NoTap` leave the decision to the timed guard.
+    fn rejects(&self) -> bool {
+        !matches!(self, Self::Off | Self::NoTap | Self::Clean(_))
+    }
+}
+
+impl fmt::Display for Fence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Off => write!(f, "off"),
+            Self::NoTap => write!(f, "no tap"),
+            Self::NoPress => write!(f, "press not seen by the tap"),
+            Self::PostFailed(err) => write!(f, "marker not posted: {err}"),
+            Self::TimedOut { nonce } => write!(f, "marker {nonce} not seen in {FENCE_TIMEOUT:?}"),
+            Self::Clean(snapshot) => write!(f, "clean {snapshot:?}"),
+            Self::Inputs(snapshot, inputs) => {
+                let inputs: Vec<String> = inputs
+                    .iter()
+                    .map(|input| format!("{:?} seq {}", input.input, input.seq))
+                    .collect();
+                write!(
+                    f,
+                    "inputs [{}] before marker {snapshot:?}",
+                    inputs.join(", ")
+                )
+            }
+            Self::Interrupted(snapshot) => write!(f, "tap interrupted {snapshot:?}"),
+        }
+    }
+}
+
+/// Posts a marker after the read and waits until the tap handles it. If
+/// the tap gets events in the order they were dispatched, every input that
+/// reached Finder before the read ended has a smaller number than the
+/// marker, however late the tap thread runs.
+fn fence_guard(session: u64, request: &Request) -> Fence {
+    let Some(kind) = request.fence else {
+        return Fence::Off;
+    };
+    if !tap::running() {
+        return Fence::NoTap;
+    }
+    let Some(press) = request.press_seq else {
+        return Fence::NoPress;
+    };
+    let nonce = match tap::post_fence(kind) {
+        Ok(nonce) => nonce,
+        Err(err) => return Fence::PostFailed(err),
+    };
+    info!(session, nonce, ?kind, press_seq = press, "fence posted");
+    let Some(snapshot) = tap::wait_fence(nonce, FENCE_TIMEOUT) else {
+        return Fence::TimedOut { nonce };
+    };
+    if snapshot.last_interrupt_seq > press {
+        Fence::Interrupted(snapshot)
+    } else if snapshot.last_input_seq > press {
+        Fence::Inputs(snapshot, tap::inputs_between(press, snapshot.seq))
+    } else {
+        Fence::Clean(snapshot)
+    }
 }
 
 /// Input since the press that could have changed the selection. The event
