@@ -20,6 +20,12 @@
 #                                the hold and Carbon Esc is not registered
 #   ORBIT_SPIKE_MAIN_DELAY_MS    main thread sleeps this long before handling
 #                                a Carbon press
+#   ORBIT_SPIKE_HOTKEY_DELAY_MS  tap callback sleeps this long on each hotkey
+#                                key-down (starts the event tap)
+#   ORBIT_SPIKE_SECURE_PULSE     "1"/"self" or "helper": Secure Input on 200 ms
+#                                after the press, off on Carbon release
+#                                (starts the event tap)
+#   ORBIT_SPIKE_NO_POLL          "1": no input state timer (watchdog) on the tap
 # All ORBIT_SPIKE_* variables are passed to the app through `open --env`.
 set -euo pipefail
 

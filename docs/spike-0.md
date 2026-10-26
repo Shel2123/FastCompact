@@ -51,6 +51,9 @@ tail -f ~/Library/Logs/Orbit/spike.log
 | `ORBIT_SPIKE_TAP_DELAY_MS` | tap ждёт столько мс перед записью каждого mouse-down/key-down (включает tap; F3) |
 | `ORBIT_SPIKE_ACTIVE=1` | активный tap: сам ведёт удержание и поглощает Esc, Carbon Esc не регистрируется (включает tap; F5) |
 | `ORBIT_SPIKE_MAIN_DELAY_MS` | main спит столько мс перед обработкой Carbon `Pressed` (F5) |
+| `ORBIT_SPIKE_HOTKEY_DELAY_MS` | callback tap спит столько мс на каждом key-down хоткея (включает tap; F10) |
+| `ORBIT_SPIKE_SECURE_PULSE` | `1`/`self` или `helper`: Secure Input включается через 200 мс после Carbon `Pressed` и выключается на Carbon `Released` (не позже 3 с); `helper` — из отдельного процесса (включает tap; F7b) |
+| `ORBIT_SPIKE_NO_POLL=1` | без таймера состояния ввода (сторожа) в run loop tap (F7b) |
 
 ## Устройство
 - **Выделение (default).** При нажатии main проверяет, что frontmost — Finder; иначе отказ без панели. Поток resolver:
@@ -196,3 +199,25 @@ _Заполняется после прогона:_
 - **F7.** Tap может пропустить отпускание Space. Сторожу нужен флаг Secure Input и HID-флаги Ctrl/Option. HID-состояние Space ненадёжно (залипает) и в сторож не идёт.
 - **F8.** Зажатая кнопка при нажатии видна и по HID, и по учёту tap → `ButtonHeld`.
 
+## Шаг 0c этапа 4: F7b–F12
+
+Проверки после ревью ревизии 2 плана: пропуск отпускания между опросами сторожа, готовность tap, жизненный цикл маркеров, координаты на нескольких экранах. Сборка с Apple Development.
+
+Что делает spike:
+- **Непрерывность.** На каждом нажатии tap читает HID-счётчики KeyDown/KeyUp (`CGEventSourceCounterForEventType(HIDSystemState, …)`) и постит baseline-маркер; на отпускании (Space-up или FlagsChanged без Ctrl/Option) — снова и release-маркер. На release-маркере сравнивает дельту HID с числом key-событий, которые прошли через callback tap. Строка `continuity … verdict=continuous|MISMATCH` с `hid_down`, `hid_up`, `tap_down`, `tap_repeat`, `tap_up`; `with_repeats`/`without_repeats` — сходится ли сумма с автоповторами tap и без них.
+- **Сторож.** `watchdog: observation lost` — когда запланированный сторож отменил бы удержание (раз за удержание). С `NO_POLL=1` таймера нет вообще.
+- **Готовность.** На каждом Carbon `Pressed`: `tap press matched` или `carbon press not seen by the tap` со `status` (`running`, `listed` = `(enabled, eventsOfInterest, missing)` из `CGGetEventTapList`, `listen_access`, `post_access`, `ax_trusted`, `secure_input`), `seen` — сколько событий каждого типа дошло до tap, `refusal` — какой отказ дал бы продукт. Не увидел — `ensure_running()` пробует создать tap заново.
+- **Порядок tap → Carbon.** `matched.in_flight=true` (строка `carbon press arrived while the tap callback was running`) — Carbon пришёл, пока callback tap для этого key-down ещё работал.
+- **Маркеры.** Активный tap поглощает все маркеры Orbit; маркер, которого никто не ждёт (поздний после таймаута забора), — `late or unknown orbit marker`. Глобальный монитор scroll пишет `orbit marker reached another application`, если маркер дошёл до приложения.
+- **Экраны.** На каждом нажатии строка `screens`: `frame`, `visibleFrame`, `backingScaleFactor` каждого экрана (первый — основной) и `main` — экран с фокусом клавиатуры. `point check` сравнивает точку tap, пересчитанную через основной экран, с `NSEvent.mouseLocation`.
+
+Сброс прав для F9: `tccutil reset Accessibility com.example.orbit.spike`, `tccutil reset ListenEvent com.example.orbit.spike`, затем перезапуск spike и выдача нужного права в System Settings → Privacy & Security.
+
+| # | Запуск и действия | Ожидание | Результат |
+|---|---|---|---|
+| F7b | `ORBIT_SPIKE_ACTIVE=1 ORBIT_SPIKE_SECURE_PULSE=1 ORBIT_SPIKE_NO_POLL=1`, Finder впереди: нажать хоткей, подождать ~0,5 с (`secure input pulse on`), отпустить **Space**, затем Ctrl и Option. 5 раз. Если `secure_input` после `pulse on` остаётся false или tap всё равно видит Space-up — повторить с `SECURE_PULSE=helper`. Затем без `NO_POLL` | Tap не видел Space-up (`tap hold end cause=modifier`); `continuity verdict=MISMATCH`, `hid_up` больше `tap_up`. Без `NO_POLL` дополнительно `watchdog: observation lost` | |
+| F7c | `ORBIT_SPIKE_ACTIVE=1`, без пульса: 50 жестов — разный порядок отпускания (Space/Ctrl/Option первым), быстрые повторные нажатия, удержание 3 с (автоповтор), набор текста перед нажатием и сразу после отпускания | Все `continuity verdict=continuous`; записать, сходится `with_repeats` или `without_repeats` | |
+| F9 | `ORBIT_SPIKE_ACTIVE=1` при: (a) ни одного права; (b) только Accessibility; (c) только Input Monitoring; (d) оба; (e) в (d) снять одно право на ходу и нажать хоткей; (f) вернуть право на ходу и нажать хоткей | Для каждого: `event tap running`/`not created` и `status`; приходят ли `tap press matched`, `seen` по типам; поглощается ли Esc удержания; нужен ли перезапуск после выдачи права | |
+| F10 | `ORBIT_SPIKE_ACTIVE=1 ORBIT_SPIKE_HOTKEY_DELAY_MS=300`: 30 нажатий, в том числе несколько Space подряд при удержанных Ctrl+Option | Ни одного `in_flight=true`; `matched=true` на каждом Carbon `Pressed`; `started`=`finished`=`matched_total` | |
+| F11 | `ORBIT_SPIKE_ACTIVE=1` — обычные жесты; затем `ORBIT_SPIKE_ACTIVE=1 ORBIT_SPIKE_TAP_DELAY_MS=600 ORBIT_SPIKE_SELECT_DELAY_MS=3000`: во время чтения кликнуть, чтобы маркер забора пришёл после таймаута 500 мс | Нет `orbit marker reached another application`; во втором случае `fence=timeout`, затем `late or unknown orbit marker`; `continuity release seen` идёт после события отпускания | |
+| F12 | Второй монитор: (a) сверху от основного; (b) слева; разный scale (Retina + 1x). Нажать хоткей на каждом экране; кликнуть на втором экране, чтобы фокус клавиатуры был там, и нажать хоткей на основном | `point check delta≈(0,0)` везде; `main` в `screens` меняется вместе с фокусом, точка — нет | |

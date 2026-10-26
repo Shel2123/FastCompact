@@ -9,12 +9,14 @@
 mod applescript;
 mod ax;
 mod panel;
+mod secure;
 mod selection;
 mod tap;
 
 use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,7 +33,7 @@ use objc2_app_kit::{
     NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFRetained, CFString};
-use objc2_core_graphics::CGEvent;
+use objc2_core_graphics::{CGEvent, CGEventField};
 use objc2_foundation::{NSBundle, NSPoint, NSString, ns_string};
 use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
@@ -45,8 +47,16 @@ const BUILD: &str = match option_env!("ORBIT_SPIKE_BUILD") {
 };
 /// A tap key-down older than this is not taken as the current press.
 const TAP_PRESS_MAX_AGE: Duration = Duration::from_secs(1);
+/// From the Carbon press to turning Secure Input on (F7b).
+const PULSE_DELAY: Duration = Duration::from_millis(200);
+/// Secure Input of a pulse is turned off after this at the latest.
+const PULSE_MAX: Duration = Duration::from_secs(3);
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some(secure::HELPER_ARG) {
+        secure::helper_main();
+        return;
+    }
     if let Err(err) = init_logging() {
         eprintln!("orbit spike: file logging unavailable: {err}");
     }
@@ -78,6 +88,12 @@ struct Config {
     active: bool,
     /// Delay of the main thread before it handles a Carbon press (F5).
     main_delay: Duration,
+    /// Delay in the tap callback of each hotkey key-down (F10).
+    hotkey_delay: Duration,
+    /// Secure Input pulse around the Space release (F7b).
+    secure_pulse: Option<secure::Source>,
+    /// No input state timer on the tap's run loop (F7b).
+    no_poll: bool,
     applescript: bool,
 }
 
@@ -122,8 +138,17 @@ impl Config {
             _ => Some(tap::FenceKind::Scroll),
         };
         let tap_delay = millis("ORBIT_SPIKE_TAP_DELAY_MS");
+        let hotkey_delay = millis("ORBIT_SPIKE_HOTKEY_DELAY_MS");
+        let secure_pulse = match var("ORBIT_SPIKE_SECURE_PULSE").as_deref() {
+            Some("1" | "self") => Some(secure::Source::OwnProcess),
+            Some("helper") => Some(secure::Source::Helper),
+            _ => None,
+        };
+        let no_poll = var("ORBIT_SPIKE_NO_POLL").as_deref() == Some("1");
         let active = var("ORBIT_SPIKE_ACTIVE").as_deref() == Some("1");
         let tap = active
+            || secure_pulse.is_some()
+            || !hotkey_delay.is_zero()
             || point_source == PointSource::Tap
             || var("ORBIT_SPIKE_TAP").as_deref() == Some("1")
             || fence_var.is_some_and(|value| value != "off")
@@ -140,6 +165,9 @@ impl Config {
             fence,
             active,
             main_delay: millis("ORBIT_SPIKE_MAIN_DELAY_MS"),
+            hotkey_delay,
+            secure_pulse,
+            no_poll,
             applescript: var("ORBIT_SPIKE_APPLESCRIPT").as_deref() != Some("0"),
         }
     }
@@ -205,7 +233,13 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
     info!(trusted = ax_trusted_with_prompt(), "accessibility trust");
 
     if config.tap {
-        tap::spawn(config.tap_delay, config.fence, config.active);
+        tap::spawn(tap::Settings {
+            input_delay: config.tap_delay,
+            hotkey_delay: config.hotkey_delay,
+            fence: config.fence,
+            active: config.active,
+            poll: !config.no_poll,
+        });
     }
 
     let app = NSApplication::sharedApplication(mtm);
@@ -237,6 +271,10 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
     if flags_monitor.is_none() {
         warn!("global flags-changed monitor was not installed");
     }
+    let marker_monitor = marker_leak_monitor();
+    if marker_monitor.is_none() {
+        warn!("global scroll monitor was not installed");
+    }
 
     if !config.block_main.is_zero() {
         spawn_main_blocker(config.block_main);
@@ -252,10 +290,12 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
         panel: panel::RadialPanel::new(mtm),
         gesture: Gesture::Idle,
         next_session: 1,
+        pulse: config.secure_pulse.map(secure::Pulse::new),
         config,
         _status_item: status_item,
         _mouse_monitor: mouse_monitor,
         _flags_monitor: flags_monitor,
+        _marker_monitor: marker_monitor,
     };
     SPIKE.with(|cell| *cell.borrow_mut() = Some(spike));
 
@@ -299,10 +339,12 @@ struct Spike {
     panel: panel::RadialPanel,
     gesture: Gesture,
     next_session: u64,
+    pulse: Option<secure::Pulse>,
     config: Config,
     _status_item: Retained<NSStatusItem>,
     _mouse_monitor: Option<Retained<AnyObject>>,
     _flags_monitor: Option<Retained<AnyObject>>,
+    _marker_monitor: Option<Retained<AnyObject>>,
 }
 
 #[derive(Debug)]
@@ -365,6 +407,10 @@ impl Spike {
         if event.id == self.invoke.id() {
             match event.state {
                 HotKeyState::Pressed => {
+                    if self.config.tap {
+                        self.check_tap_press();
+                    }
+                    self.arm_pulse();
                     if !self.config.main_delay.is_zero() {
                         // F5: a late main thread; an Esc pressed meanwhile
                         // must not reach the frontmost app.
@@ -373,7 +419,12 @@ impl Spike {
                     }
                     self.on_pressed(captured);
                 }
-                HotKeyState::Released => self.on_released("space"),
+                HotKeyState::Released => {
+                    if let Some(pulse) = self.pulse.as_mut() {
+                        pulse.disable("carbon released");
+                    }
+                    self.on_released("space");
+                }
             }
         } else if let Some(escape) = self.escapes.iter().find(|hk| hk.id() == event.id) {
             if event.state == HotKeyState::Pressed {
@@ -382,6 +433,62 @@ impl Spike {
             }
         } else {
             warn!(id = event.id, "unknown hotkey id");
+        }
+    }
+
+    /// F9/F10: whether the tap saw the key-down of this Carbon press, and
+    /// what the product would refuse with if it did not.
+    fn check_tap_press(&self) {
+        let matched = tap::match_hotkey();
+        let status = tap::status();
+        if matched.in_flight {
+            error!(
+                ?matched,
+                "carbon press arrived while the tap callback was running"
+            );
+        }
+        if matched.matched {
+            info!(?matched, ?status, seen = ?tap::seen_by_type(), "tap press matched");
+        } else {
+            warn!(
+                ?matched,
+                ?status,
+                seen = ?tap::seen_by_type(),
+                refusal = status.refusal(),
+                "carbon press not seen by the tap"
+            );
+            tap::ensure_running();
+        }
+    }
+
+    /// F7b: schedules Secure Input on for this press and a fallback off.
+    fn arm_pulse(&mut self) {
+        let Some(pulse) = self.pulse.as_mut() else {
+            return;
+        };
+        let armed = pulse.arm();
+        let spawned = thread::Builder::new()
+            .name("orbit-spike-pulse".into())
+            .spawn(move || {
+                thread::sleep(PULSE_DELAY);
+                DispatchQueue::main().exec_async(move || {
+                    with_spike(|spike| {
+                        if let Some(pulse) = spike.pulse.as_mut() {
+                            pulse.enable(armed);
+                        }
+                    });
+                });
+                thread::sleep(PULSE_MAX);
+                DispatchQueue::main().exec_async(move || {
+                    with_spike(|spike| {
+                        if let Some(pulse) = spike.pulse.as_mut() {
+                            pulse.expire(armed);
+                        }
+                    });
+                });
+            });
+        if let Err(err) = spawned {
+            error!(%err, "secure input pulse thread not started");
         }
     }
 
@@ -398,6 +505,7 @@ impl Spike {
         let tap_press = tap::take_press()
             .filter(|press| captured.at.duration_since(press.seen_at) < TAP_PRESS_MAX_AGE);
         let frontmost = frontmost_app();
+        log_screens(self.mtm);
         info!(
             session,
             mode = ?self.config.mode,
@@ -689,6 +797,41 @@ fn flags_monitor() -> Option<Retained<AnyObject>> {
         with_spike(|spike| spike.on_flags_changed(flags));
     });
     NSEvent::addGlobalMonitorForEventsMatchingMask_handler(NSEventMask::FlagsChanged, &handler)
+}
+
+/// F11: a scroll event reaching another application with an Orbit marker
+/// tag means the tap let a marker through.
+fn marker_leak_monitor() -> Option<Retained<AnyObject>> {
+    let handler = block2::RcBlock::new(|event: NonNull<NSEvent>| {
+        // SAFETY: AppKit passes a valid event for the duration of the call.
+        let event = unsafe { event.as_ref() };
+        let Some(cg_event) = event.CGEvent() else {
+            return;
+        };
+        let user_data =
+            CGEvent::integer_value_field(Some(&cg_event), CGEventField::EventSourceUserData);
+        if tap::is_orbit_marker(user_data) {
+            warn!(user_data, "orbit marker reached another application");
+        }
+    });
+    NSEvent::addGlobalMonitorForEventsMatchingMask_handler(NSEventMask::ScrollWheel, &handler)
+}
+
+/// F12: every screen with its frame, visible frame and scale, the primary
+/// screen first, and the screen AppKit calls main (keyboard focus).
+fn log_screens(mtm: MainThreadMarker) {
+    let screens: Vec<_> = NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| {
+            (
+                screen.frame(),
+                screen.visibleFrame(),
+                screen.backingScaleFactor(),
+            )
+        })
+        .collect();
+    let main = NSScreen::mainScreen(mtm).map(|screen| screen.frame());
+    info!(?screens, ?main, "screens");
 }
 
 /// Blocks the main thread periodically to delay hotkey delivery (scenario 6b).
