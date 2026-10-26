@@ -74,6 +74,10 @@ struct Config {
     tap_delay: Duration,
     /// Marker of the fence guard (scenarios F2, F3).
     fence: Option<tap::FenceKind>,
+    /// Active tap that swallows Esc during the hold; no Carbon Esc (F5).
+    active: bool,
+    /// Delay of the main thread before it handles a Carbon press (F5).
+    main_delay: Duration,
     applescript: bool,
 }
 
@@ -118,7 +122,9 @@ impl Config {
             _ => Some(tap::FenceKind::Scroll),
         };
         let tap_delay = millis("ORBIT_SPIKE_TAP_DELAY_MS");
-        let tap = point_source == PointSource::Tap
+        let active = var("ORBIT_SPIKE_ACTIVE").as_deref() == Some("1");
+        let tap = active
+            || point_source == PointSource::Tap
             || var("ORBIT_SPIKE_TAP").as_deref() == Some("1")
             || fence_var.is_some_and(|value| value != "off")
             || !tap_delay.is_zero();
@@ -132,6 +138,8 @@ impl Config {
             tap,
             tap_delay,
             fence,
+            active,
+            main_delay: millis("ORBIT_SPIKE_MAIN_DELAY_MS"),
             applescript: var("ORBIT_SPIKE_APPLESCRIPT").as_deref() != Some("0"),
         }
     }
@@ -197,7 +205,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
     info!(trusted = ax_trusted_with_prompt(), "accessibility trust");
 
     if config.tap {
-        tap::spawn(config.tap_delay, config.fence);
+        tap::spawn(config.tap_delay, config.fence, config.active);
     }
 
     let app = NSApplication::sharedApplication(mtm);
@@ -347,10 +355,24 @@ impl Spike {
         } else {
             "escape"
         };
-        info!(which, state = ?event.state, gesture = ?self.gesture, "carbon event");
+        info!(
+            which,
+            state = ?event.state,
+            gesture = ?self.gesture,
+            secure_input = tap::secure_input_enabled(),
+            "carbon event"
+        );
         if event.id == self.invoke.id() {
             match event.state {
-                HotKeyState::Pressed => self.on_pressed(captured),
+                HotKeyState::Pressed => {
+                    if !self.config.main_delay.is_zero() {
+                        // F5: a late main thread; an Esc pressed meanwhile
+                        // must not reach the frontmost app.
+                        info!(delay = ?self.config.main_delay, "main thread delayed");
+                        thread::sleep(self.config.main_delay);
+                    }
+                    self.on_pressed(captured);
+                }
                 HotKeyState::Released => self.on_released("space"),
             }
         } else if let Some(escape) = self.escapes.iter().find(|hk| hk.id() == event.id) {
@@ -594,6 +616,10 @@ impl Spike {
 
     fn register_escapes(&mut self) {
         if self.escapes_registered {
+            return;
+        }
+        if self.config.active {
+            // F5: only the tap swallows Esc.
             return;
         }
         for escape in &self.escapes {

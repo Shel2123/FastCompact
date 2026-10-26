@@ -16,6 +16,10 @@
 #   ORBIT_SPIKE_FENCE            fence marker: "scroll" (default), "move", "null", "off";
 #                                anything but "off" starts the event tap
 #   ORBIT_SPIKE_TAP_DELAY_MS     tap waits this long before recording each input
+#   ORBIT_SPIKE_ACTIVE           "1" makes the tap active: it swallows Esc during
+#                                the hold and Carbon Esc is not registered
+#   ORBIT_SPIKE_MAIN_DELAY_MS    main thread sleeps this long before handling
+#                                a Carbon press
 # All ORBIT_SPIKE_* variables are passed to the app through `open --env`.
 set -euo pipefail
 

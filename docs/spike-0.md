@@ -49,6 +49,8 @@ tail -f ~/Library/Logs/Orbit/spike.log
 | `ORBIT_SPIKE_POINT=tap` | брать точку из key-down события `CGEventTap` (включает tap) |
 | `ORBIT_SPIKE_FENCE` | маркер забора: `scroll` (по умолчанию), `move`, `null`, `off`; любое значение кроме `off` включает tap (этап 4, F2/F3) |
 | `ORBIT_SPIKE_TAP_DELAY_MS` | tap ждёт столько мс перед записью каждого mouse-down/key-down (включает tap; F3) |
+| `ORBIT_SPIKE_ACTIVE=1` | активный tap: сам ведёт удержание и поглощает Esc, Carbon Esc не регистрируется (включает tap; F5) |
+| `ORBIT_SPIKE_MAIN_DELAY_MS` | main спит столько мс перед обработкой Carbon `Pressed` (F5) |
 
 ## Устройство
 - **Выделение (default).** При нажатии main проверяет, что frontmost — Finder; иначе отказ без панели. Поток resolver:
@@ -159,4 +161,38 @@ _Заполняется после прогона:_
 Прогон 2026-10-26, сборка `8d760f0`, маркер `scroll`. Итог: допущения F1–F4 подтверждены, этап 4 идёт по плану с listen-only tap и маркером `scroll`.
 
 Если F3 не подтвердится (клик B после маркера или Resolved(B)), этап 4 останавливается: обсуждаем active tap.
+
+## Шаг 0b этапа 4: F5–F8
+
+Проверки после ревью второй версии плана:
+- ранний Esc;
+- Secure Input при нажатии и во время удержания;
+- drag, начатый до нажатия.
+
+Сборка с Apple Development.
+
+Новые строки лога:
+- `tap hold start` / `tap hold end` — удержание, как его видит сам tap; в `tap hold start` есть `hid_left` и `tap_buttons`;
+- `tap swallowed escape key-down/key-up`;
+- `tap drag during hold`, `tap mouse-up during hold`, `tap mouse-down`;
+- `input state` — таймер в run loop tap, раз в 50 мс, пишет только изменения: `secure_input`, `held`, `hid_space`, `hid_control`, `hid_option`, `hid_left`;
+- `carbon event … secure_input=`.
+
+Проверка Esc: в Terminal запустить `cat -v`. Если Esc дошёл до приложения, в выводе появится `^[`.
+
+| # | Запуск и действия | Ожидание | Результат |
+|---|---|---|---|
+| F5a | `ORBIT_SPIKE_ACTIVE=1` | `event tap running active=true`; записать `listen`/`post`. Если `event tap not created` — какие права выданы. По возможности: снять Input Monitoring при включённом Accessibility и наоборот, перезапустить || ✅ Активный tap создан при Accessibility + Input Monitoring (`listen=true post=true`). Какое из двух обязательно, не проверяли (права не снимали) |
+| F5b | Контроль: `ORBIT_SPIKE_TAP=1 ORBIT_SPIKE_MAIN_DELAY_MS=300` (listen-only, Carbon Esc). Terminal с `cat -v` впереди: нажать хоткей, сразу Esc, отпустить | Esc доходит до Terminal (`^[`) — окно из ревью воспроизведено || ✅ Окно воспроизведено: Esc через 249 мс после Carbon `Pressed`, пока main спит (`main thread delayed 300ms`), — `^[` в iTerm2; так же каждый Esc удержания вне Finder (Carbon Esc регистрируется только при открытой панели). Первый прогон не засчитан: был включён Secure Keyboard Entry (`secure_input=true`, tap слеп) |
+| F5c | `ORBIT_SPIKE_ACTIVE=1 ORBIT_SPIKE_MAIN_DELAY_MS=300`, то же. Повторить в Finder: Esc в удержании и Esc сразу после нажатия | `tap swallowed escape key-down`/`key-up`, `^[` нет. Esc без удержания доходит как обычно || ✅ Сборка `c8c9d5e`+, `MAIN_DELAY_MS=300`: каждый Esc в удержании (iTerm2 `cat -v` и Finder, в т.ч. 3 подряд) → `tap swallowed escape key-down`/`key-up`, `^[` нет. Esc после `tap hold end` проходит. Решение принимает сам tap по своему удержанию, main не участвует → окна нет по построению |
+| F5d | `ORBIT_SPIKE_ACTIVE=1 ORBIT_SPIKE_TAP_DELAY_MS=300 ORBIT_SPIKE_SELECT_DELAY_MS=3000`: повтор F3 (клик B во время чтения); без задержек — обычные жесты и набор текста | `fence=inputs` → `Unstable`; без задержек `latency` как в F2, ввод не тормозит || ✅ 3 из 3: клик B во время чтения → `fence=inputs [MouseDown …]` → отказ, хотя AX уже прочитал B (`Resolved(B)`). Маркер после задержанного ввода, `latency` 0,12–0,23 мс. `TapDisabledByTimeout` 3 раза вне жестов (как F3b). Без задержек `latency` маркера 0,14–3 мс — как в F2 |
+| F6 | `ORBIT_SPIKE_ACTIVE=1`. Terminal → Secure Keyboard Entry включён, Terminal впереди: нажать хоткей, отпустить; кликнуть мышью | `input state secure_input=true`. Есть ли `carbon event invoke Pressed`? Есть ли `tap key space`/`tap hold start`? `TapDisabledByUserInput`? `tap mouse-down` есть? || Carbon `Pressed`/`Released` приходят (`secure_input=true`). Tap **не видит** key-down/key-up Space хоткея, но видит FlagsChanged (Ctrl/Option) и mouse-down. `TapDisabledBy*` нет. HID: флаги Ctrl/Option верны, `key_state(Space)` = false при нажатом Space. Esc при этом доходит до iTerm2 (`^[`): жеста нет, tap его не начал — ожидаемо. Отдельно: в 13:08:41–13:09:48 UTC при `secure_input=true` tap видел Space/fn обычного набора — не разобрано |
+| F7 | Там же, Finder впереди (Secure Input выключен): удержать хоткей, не отпуская кликнуть в окно Terminal (Secure Input включается), отпустить клавиши, вернуться в Finder | `input state` с `secure_input=true`. После отпускания: `held=true` (tap не видел отпускание?), `hid_space`/`hid_control`/`hid_option` = false? Пришёл ли `tap hold end` || Удержание в Finder → клик в iTerm2 → `secure_input=true` при `held=true` через ~50 мс. Отпускание: Space key-up tap **пропустил** (Carbon `Released` пришёл), FlagsChanged увидел → `tap hold end` по модификатору. HID `key_state(Space)` залип в true на десятки секунд после отпускания — для сторожа непригоден; HID-флаги Ctrl/Option верны. Клик с ⌃⌥ в iTerm2 вызывает его собственную реакцию на модифицированный клик — артефакт сценария |
+| F8 | Finder, icons view: зажать кнопку на пустом месте и тянуть рамку; не отпуская, нажать хоткей; тянуть дальше; отпустить кнопку | `tap hold start hid_left=true tap_buttons=1`; `tap drag during hold`; `tap mouse-up during hold`. Старый guard spike, скорее всего, даст `fence=clean` — это и есть P2 || ✅ Рамка в icons view, затем хоткей: `tap hold start hid_left=true tap_buttons=1` (3 из 3), `tap drag during hold`, `tap mouse-up during hold`. Старый guard spike дал `fence=clean` (P2 воспроизведён); спасло только то, что AX не дал выделение во время рамки (`no AXSelectedChildren`) → отказ |
+
+Прогон 2026-10-26, сборка `c8c9d5e` + правки spike. Итог:
+- **F5.** Активный tap поглощает Esc удержания синхронно, ревью подтверждено: окно (F5b) есть, решение (F5c) его закрывает. Порядок забора сохраняется (F5d).
+- **F6.** При Secure Input Carbon `Pressed` приходит, а tap не видит Space хоткея → отказ по Carbon-пути (`SecureInputOn`).
+- **F7.** Tap может пропустить отпускание Space. Сторожу нужен флаг Secure Input и HID-флаги Ctrl/Option. HID-состояние Space ненадёжно (залипает) и в сторож не идёт.
+- **F8.** Зажатая кнопка при нажатии видна и по HID, и по учёту tap → `ButtonHeld`.
 
