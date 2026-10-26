@@ -213,6 +213,8 @@ name = "orbit-app"
 version = "0.1.0"
 dependencies = [
  "orbit-domain",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
