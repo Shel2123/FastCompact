@@ -290,6 +290,7 @@ enum Gesture {
     },
     Open {
         session: u64,
+        pressed_at: Instant,
         /// The target fixed for the whole gesture; `None` in cursor mode,
         /// where the resolution is only logged.
         target: Option<PathBuf>,
@@ -428,12 +429,17 @@ impl Spike {
                     cause, "released before the target was read; gesture closed"
                 );
             }
-            Gesture::Open { session, target } => info!(
+            Gesture::Open {
+                session,
+                pressed_at,
+                target,
+            } => info!(
                 session,
                 ?target,
                 cause,
                 sector = ?self.panel.selected(),
                 frontmost = ?frontmost_bundle_id(),
+                tap_inputs = ?tap_inputs_since(*pressed_at),
                 "released"
             ),
         }
@@ -462,7 +468,7 @@ impl Spike {
                                 ?since_press,
                                 "hit-test ok; showing panel"
                             );
-                            self.open(session, cocoa_point, None);
+                            self.open(session, cocoa_point, pressed_at, None);
                         }
                         Err(reason) => {
                             info!(session, %reason, ?elapsed, "hit-test rejected; no panel");
@@ -500,7 +506,7 @@ impl Spike {
                         self.gesture = Gesture::Idle;
                         return;
                     };
-                    self.open(session, cocoa_point, Some(path));
+                    self.open(session, cocoa_point, pressed_at, Some(path));
                     let verify = ax::Request::Verify(selection::Verify {
                         session,
                         finder_pid,
@@ -515,7 +521,13 @@ impl Spike {
         }
     }
 
-    fn open(&mut self, session: u64, cocoa_point: NSPoint, target: Option<PathBuf>) {
+    fn open(
+        &mut self,
+        session: u64,
+        cocoa_point: NSPoint,
+        pressed_at: Instant,
+        target: Option<PathBuf>,
+    ) {
         let center = self.panel.show(self.mtm, cocoa_point);
         info!(
             session,
@@ -526,7 +538,11 @@ impl Spike {
             "panel shown"
         );
         self.register_escapes();
-        self.gesture = Gesture::Open { session, target };
+        self.gesture = Gesture::Open {
+            session,
+            pressed_at,
+            target,
+        };
     }
 
     fn close(&mut self, reason: &str) {
@@ -671,6 +687,15 @@ fn other_instances() -> Vec<i32> {
     running_pids(BUNDLE_ID)
         .into_iter()
         .filter(|pid| *pid != own)
+        .collect()
+}
+
+/// Tap inputs seen after `since`, each with its offset from `since`. Shows
+/// whether a click or key-down came before or after the selection read.
+fn tap_inputs_since(since: Instant) -> Vec<(tap::Input, Duration)> {
+    tap::inputs_since(since)
+        .into_iter()
+        .map(|input| (input.input, input.seen_at.duration_since(since)))
         .collect()
 }
 
