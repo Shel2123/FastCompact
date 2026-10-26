@@ -9,14 +9,30 @@ publish.workspace = true
 [dependencies]
 orbit-app.workspace = true
 orbit-domain.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSButton",
+    "NSControl",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSView",
+] }
+objc2-foundation = { workspace = true, features = ["std", "NSString"] }
+thiserror.workspace = true
+tracing.workspace = true
 
-# Used only by the stage 0 spike example; these move to [dependencies]
-# once the real adapters are written.
+# Used by the stage 0 spike example and the main-thread test; the spike
+# features move to [dependencies] as the real adapters are written.
 [dev-dependencies]
 block2.workspace = true
-dispatch2.workspace = true
 global-hotkey.workspace = true
-objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "std",
     "block2",
@@ -52,6 +68,7 @@ objc2-application-services = { workspace = true, features = [
 objc2-core-foundation = { workspace = true, features = [
     "std",
     "CFArray",
+    "CFDate",
     "CFDictionary",
     "CFMachPort",
     "CFNumber",
@@ -77,12 +94,15 @@ objc2-foundation = { workspace = true, features = [
     "NSJSONSerialization",
     "NSString",
 ] }
-tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [[example]]
 name = "spike"
 path = "examples/spike/main.rs"
+
+[[test]]
+name = "main_thread"
+harness = false
 
 [lints]
 workspace = true

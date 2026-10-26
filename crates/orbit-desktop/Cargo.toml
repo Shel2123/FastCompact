@@ -12,7 +12,13 @@ path = "src/main.rs"
 
 [dependencies]
 orbit-app.workspace = true
+orbit-domain.workspace = true
 orbit-macos.workspace = true
+crossbeam-channel.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

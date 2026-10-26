@@ -31,6 +31,13 @@ pub struct GestureId(pub u64);
 pub struct JobId(u64);
 
 impl JobId {
+    /// An id with the given number, for tests of the runtime. The controller
+    /// issues the ids of real jobs; an event with an id it did not issue is
+    /// dropped.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
     /// The first id the controller issues.
     pub(crate) const FIRST: Self = Self(1);
 
@@ -294,6 +301,10 @@ pub enum JobError {
         /// Description for the user.
         message: String,
     },
+    /// A fault of Orbit itself, such as a panic in the operation or stopped
+    /// workers.
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 /// Fraction of a job that is done, in `0.0..=1.0`.
