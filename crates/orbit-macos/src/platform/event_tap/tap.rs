@@ -108,6 +108,20 @@ pub enum TapError {
     Thread(#[from] io::Error),
 }
 
+/// How the tap runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TapOptions {
+    /// Run the watchdog during a gesture. Turned off only to test the
+    /// continuity check alone.
+    pub watchdog: bool,
+}
+
+impl Default for TapOptions {
+    fn default() -> Self {
+        Self { watchdog: true }
+    }
+}
+
 /// The tap as the system lists it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListedTap {
@@ -163,6 +177,7 @@ unsafe impl Sync for TapRunLoop {}
 
 struct Shared {
     log: Arc<InputLog>,
+    options: TapOptions,
     on_signal: Box<dyn Fn(Signal) + Send + Sync>,
     /// The tap thread runs its run loop with the tap.
     running: AtomicBool,
@@ -206,6 +221,7 @@ impl EventTap {
     /// order, and must not block.
     pub fn start(
         log: Arc<InputLog>,
+        options: TapOptions,
         on_signal: impl Fn(Signal) + Send + Sync + 'static,
     ) -> Result<Self, TapError> {
         if STARTED.swap(true, Ordering::AcqRel) {
@@ -213,6 +229,7 @@ impl EventTap {
         }
         let shared = Arc::new(Shared {
             log,
+            options,
             on_signal: Box::new(on_signal),
             running: AtomicBool::new(false),
             starting: AtomicBool::new(false),
@@ -442,7 +459,7 @@ impl TapThread {
     /// Runs the watchdog while a gesture is in progress and parks it
     /// otherwise, so an idle tap thread does not wake up.
     fn watch(&mut self) {
-        let needed = self.tracker.needs_poll();
+        let needed = self.shared.options.watchdog && self.tracker.needs_poll();
         if needed == self.watching {
             return;
         }
