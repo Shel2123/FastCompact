@@ -6,9 +6,11 @@
 //! order of the events for the selection guard of the target resolver.
 //!
 //! Both are free of Core Graphics types, so the logic is tested without a
-//! tap.
+//! tap. [`tap::EventTap`] runs the real tap and [`fence`] posts markers.
 
+pub mod fence;
 pub mod log;
+pub mod tap;
 pub mod tracker;
 
 /// Tag in the upper half of `EventSourceUserData` that marks an event posted

@@ -19,12 +19,36 @@ objc2-app-kit = { workspace = true, features = [
     "NSMenu",
     "NSMenuItem",
     "NSResponder",
+    "NSScreen",
     "NSStatusBar",
     "NSStatusBarButton",
     "NSStatusItem",
     "NSView",
 ] }
-objc2-foundation = { workspace = true, features = ["std", "NSString"] }
+objc2-application-services = { workspace = true, features = [
+    "std",
+    "libc",
+    "HIServices",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "std",
+    "CFDate",
+    "CFDictionary",
+    "CFMachPort",
+    "CFNumber",
+    "CFRunLoop",
+    "CFString",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "std",
+    "libc",
+    "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGRemoteOperation",
+] }
+objc2-foundation = { workspace = true, features = ["std", "NSGeometry", "NSString"] }
 thiserror.workspace = true
 tracing.workspace = true
 
