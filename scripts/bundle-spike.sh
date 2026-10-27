@@ -22,6 +22,8 @@
 #                                a Carbon press
 #   ORBIT_SPIKE_HOTKEY_DELAY_MS  tap callback sleeps this long on each hotkey
 #                                key-down (starts the event tap)
+#   ORBIT_SPIKE_MARKER_DELAY_MS  tap callback sleeps this long on each Orbit
+#                                marker (starts the event tap)
 #   ORBIT_SPIKE_SECURE_PULSE     "1"/"self" or "helper": Secure Input on 200 ms
 #                                after the press, off on Carbon release
 #                                (starts the event tap)

@@ -21,10 +21,13 @@
 //! Orbit marker, logs what the system reports about the tap itself, and
 //! counts hotkey key-downs so that each Carbon press can be matched to one.
 //!
-//! Needs Input Monitoring access; without it the tap is not created. An
-//! active tap may need Accessibility instead (F5, F9).
+//! A listen-only tap needs Input Monitoring or Accessibility; an active tap
+//! needs Accessibility, Input Monitoring alone does not create it (F9). An
+//! active tap that loses Accessibility stalls all input until the system's
+//! timeout disables it, so the tap thread checks access on a timer and
+//! removes the tap instead of enabling it again (F9e).
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -53,6 +56,12 @@ const ESCAPE_KEYCODE: i64 = 0x35;
 const POLL_INTERVAL: f64 = 0.05;
 /// Space as a `CGKeyCode`, for the HID key state.
 const SPACE_KEY: u16 = 0x31;
+/// More system disables than this within [`DISABLE_WINDOW`] remove the tap
+/// instead of enabling it again.
+const MAX_DISABLES: usize = 3;
+const DISABLE_WINDOW: Duration = Duration::from_secs(10);
+/// How often the tap thread checks that the process still has access (F9e).
+const ACCESS_CHECK_INTERVAL: f64 = 0.25;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TapPress {
@@ -127,6 +136,9 @@ pub struct Settings {
     pub input_delay: Duration,
     /// Delay in the callback of each hotkey key-down (F10).
     pub hotkey_delay: Duration,
+    /// Delay in the callback of each Orbit marker, so that a fence times out
+    /// and its marker arrives late (F11).
+    pub marker_delay: Duration,
     /// Adds the marker's event type to the tap mask (F2).
     pub fence: Option<FenceKind>,
     /// The tap may swallow events (F5, F11).
@@ -161,6 +173,8 @@ static LAST_INTERRUPT_SEQ: AtomicU64 = AtomicU64::new(0);
 static INPUT_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 /// Delay the tap applies to each hotkey key-down (F10).
 static HOTKEY_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+/// Delay the tap applies to each Orbit marker (F11).
+static MARKER_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 /// The tap may swallow events (F5).
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// The tap's own view of the hotkey hold, without the main thread.
@@ -196,6 +210,8 @@ static CONTINUITY: Mutex<Continuity> = Mutex::new(Continuity::new());
 thread_local! {
     /// The tap's port, to enable it again after the system disables it.
     static PORT: OnceCell<CFRetained<CFMachPort>> = const { OnceCell::new() };
+    /// When the system disabled the tap, newest last.
+    static DISABLES: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
 }
 
 /// Takes the key-down recorded since the previous call, if any.
@@ -335,6 +351,7 @@ pub fn spawn(settings: Settings) {
     let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
     INPUT_DELAY_MS.store(millis(settings.input_delay), Ordering::Relaxed);
     HOTKEY_DELAY_MS.store(millis(settings.hotkey_delay), Ordering::Relaxed);
+    MARKER_DELAY_MS.store(millis(settings.marker_delay), Ordering::Relaxed);
     ACTIVE.store(settings.active, Ordering::Relaxed);
     *SETTINGS.lock().unwrap_or_else(PoisonError::into_inner) = Some(settings);
     start_thread(settings);
@@ -446,6 +463,22 @@ fn run_tap(settings: Settings) {
             None => warn!("input state timer not created"),
         }
     }
+    // SAFETY: as for the input state timer.
+    let access_timer = unsafe {
+        CFRunLoopTimer::new(
+            None,
+            CFAbsoluteTimeGetCurrent() + ACCESS_CHECK_INTERVAL,
+            ACCESS_CHECK_INTERVAL,
+            0,
+            0,
+            Some(on_access_check),
+            std::ptr::null_mut(),
+        )
+    };
+    match &access_timer {
+        Some(timer) => run_loop.add_timer(Some(timer), modes),
+        None => warn!("access check timer not created"),
+    }
     CGEvent::tap_enable(&port, true);
     PORT.with(|cell| {
         if cell.set(port).is_err() {
@@ -461,6 +494,7 @@ fn run_tap(settings: Settings) {
         "event tap running"
     );
     CFRunLoop::run();
+    info!("event tap removed; tap thread ends");
 }
 
 /// What the system reports about the tap and the access it depends on (F9).
@@ -481,6 +515,17 @@ impl Status {
     /// The tap gets every required event type.
     pub fn ready(&self) -> bool {
         self.running && matches!(self.listed, Some((true, _, 0)))
+    }
+
+    /// Whether the process has the access its tap needs (F9): an active tap
+    /// needs Accessibility, Input Monitoring alone does not create it; a
+    /// listen-only tap works with either.
+    pub fn has_access(&self) -> bool {
+        if ACTIVE.load(Ordering::Relaxed) {
+            self.ax_trusted
+        } else {
+            self.ax_trusted || self.listen_access
+        }
     }
 
     /// The refusal the product would give for a Carbon press the tap did
@@ -598,6 +643,36 @@ pub fn match_hotkey() -> HotkeyMatch {
     }
 }
 
+/// Records a system disable at `at`; whether there were more than
+/// [`MAX_DISABLES`] within [`DISABLE_WINDOW`]. Tap thread only.
+fn note_disable(at: Instant) -> bool {
+    DISABLES.with_borrow_mut(|disables| {
+        disables.push_back(at);
+        while disables
+            .front()
+            .is_some_and(|first| at.duration_since(*first) > DISABLE_WINDOW)
+        {
+            disables.pop_front();
+        }
+        disables.len() > MAX_DISABLES
+    })
+}
+
+/// Invalidates the tap and stops its run loop, which ends the tap thread.
+/// Tap thread only.
+fn remove_tap() {
+    PORT.with(|cell| {
+        if let Some(port) = cell.get() {
+            port.invalidate();
+        }
+    });
+    RUNNING.store(false, Ordering::Release);
+    match CFRunLoop::current() {
+        Some(run_loop) => run_loop.stop(),
+        None => error!("no run loop for the tap thread; it keeps running"),
+    }
+}
+
 unsafe extern "C-unwind" fn on_event(
     _proxy: CGEventTapProxy,
     event_type: CGEventType,
@@ -616,11 +691,33 @@ unsafe extern "C-unwind" fn on_event(
         || event_type == CGEventType::TapDisabledByUserInput
     {
         LAST_INTERRUPT_SEQ.store(seq, Ordering::Relaxed);
-        warn!(seq, ?event_type, status = ?status(), "event tap disabled; enabling it again");
-        PORT.with(|cell| match cell.get() {
-            Some(port) => CGEvent::tap_enable(port, true),
-            None => error!("tap port unknown; the tap stays disabled"),
-        });
+        let status = status();
+        let storm = note_disable(seen_at);
+        // F9e: an active tap whose access was revoked stays in the event
+        // path; enabling it again makes every event wait for the timeout and
+        // stalls all input. Remove it instead; `ensure_running` creates it
+        // again once access is back.
+        if !status.has_access() || storm {
+            warn!(
+                seq,
+                ?event_type,
+                ?status,
+                storm,
+                "event tap disabled; removing it"
+            );
+            remove_tap();
+        } else {
+            warn!(
+                seq,
+                ?event_type,
+                ?status,
+                "event tap disabled; enabling it again"
+            );
+            PORT.with(|cell| match cell.get() {
+                Some(port) => CGEvent::tap_enable(port, true),
+                None => error!("tap port unknown; the tap stays disabled"),
+            });
+        }
         return event.as_ptr();
     }
     // SAFETY: the system passes a valid event for the duration of the call.
@@ -629,6 +726,10 @@ unsafe extern "C-unwind" fn on_event(
 
     let user_data = field(CGEventField::EventSourceUserData);
     if is_orbit_marker(user_data) {
+        let delay = MARKER_DELAY_MS.load(Ordering::Relaxed);
+        if delay > 0 {
+            thread::sleep(Duration::from_millis(delay));
+        }
         let known = handle_fence(user_data, seq, event_type) || handle_continuity(user_data, seq);
         if !known {
             warn!(user_data, seq, ?event_type, "late or unknown orbit marker");
@@ -1015,6 +1116,21 @@ impl PollState {
 /// Logs every change of the input state. Lets F7 compare what the tap saw
 /// with the HID state while Secure Input hides the keyboard from the tap.
 /// Also logs when the planned watchdog would cancel the hold.
+/// Removes the tap as soon as the process loses access (F9e), before the
+/// system's timeout disables it and stalls input meanwhile.
+unsafe extern "C-unwind" fn on_access_check(_timer: *mut CFRunLoopTimer, _info: *mut c_void) {
+    let started = Instant::now();
+    let status = status();
+    let took = started.elapsed();
+    if took > Duration::from_millis(5) {
+        warn!(?took, "access check was slow");
+    }
+    if !status.has_access() {
+        warn!(?status, ?took, "access lost; removing the event tap");
+        remove_tap();
+    }
+}
+
 unsafe extern "C-unwind" fn on_poll(_timer: *mut CFRunLoopTimer, _info: *mut c_void) {
     static LAST: Mutex<Option<PollState>> = Mutex::new(None);
     let state = PollState::now();

@@ -90,6 +90,8 @@ struct Config {
     main_delay: Duration,
     /// Delay in the tap callback of each hotkey key-down (F10).
     hotkey_delay: Duration,
+    /// Delay in the tap callback of each Orbit marker (F11).
+    marker_delay: Duration,
     /// Secure Input pulse around the Space release (F7b).
     secure_pulse: Option<secure::Source>,
     /// No input state timer on the tap's run loop (F7b).
@@ -139,6 +141,7 @@ impl Config {
         };
         let tap_delay = millis("ORBIT_SPIKE_TAP_DELAY_MS");
         let hotkey_delay = millis("ORBIT_SPIKE_HOTKEY_DELAY_MS");
+        let marker_delay = millis("ORBIT_SPIKE_MARKER_DELAY_MS");
         let secure_pulse = match var("ORBIT_SPIKE_SECURE_PULSE").as_deref() {
             Some("1" | "self") => Some(secure::Source::OwnProcess),
             Some("helper") => Some(secure::Source::Helper),
@@ -149,6 +152,7 @@ impl Config {
         let tap = active
             || secure_pulse.is_some()
             || !hotkey_delay.is_zero()
+            || !marker_delay.is_zero()
             || point_source == PointSource::Tap
             || var("ORBIT_SPIKE_TAP").as_deref() == Some("1")
             || fence_var.is_some_and(|value| value != "off")
@@ -166,6 +170,7 @@ impl Config {
             active,
             main_delay: millis("ORBIT_SPIKE_MAIN_DELAY_MS"),
             hotkey_delay,
+            marker_delay,
             secure_pulse,
             no_poll,
             applescript: var("ORBIT_SPIKE_APPLESCRIPT").as_deref() != Some("0"),
@@ -236,6 +241,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
         tap::spawn(tap::Settings {
             input_delay: config.tap_delay,
             hotkey_delay: config.hotkey_delay,
+            marker_delay: config.marker_delay,
             fence: config.fence,
             active: config.active,
             poll: !config.no_poll,
