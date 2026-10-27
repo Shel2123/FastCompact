@@ -89,7 +89,7 @@ enum Fence {
     Seen(FenceSnapshot),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct State {
     seq: u64,
     last_input_seq: u64,
@@ -99,6 +99,23 @@ struct State {
     presses: VecDeque<(GestureId, Press)>,
     fences: Vec<(u32, Fence)>,
     next_nonce: u32,
+    next_gesture: u64,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            seq: 0,
+            last_input_seq: 0,
+            last_interrupt_seq: 0,
+            hotkey_downs: 0,
+            hotkey_matched: 0,
+            presses: VecDeque::new(),
+            fences: Vec::new(),
+            next_nonce: 0,
+            next_gesture: 1,
+        }
+    }
 }
 
 impl State {
@@ -169,6 +186,22 @@ impl InputLog {
         let seq = state.next_seq();
         state.last_interrupt_seq = seq;
         seq
+    }
+
+    /// A new gesture id. The log outlives every tap the process creates, so
+    /// ids stay unique when the tap is created again; they only need to
+    /// differ among recent gestures, so wrapping around is harmless.
+    pub fn next_gesture(&self) -> GestureId {
+        let mut state = self.lock();
+        let gesture = GestureId(state.next_gesture);
+        state.next_gesture = state.next_gesture.wrapping_add(1);
+        gesture
+    }
+
+    /// Makes `raw` the next gesture id, for tests of wrapping.
+    #[cfg(test)]
+    pub(crate) fn set_next_gesture(&self, raw: u64) {
+        self.lock().next_gesture = raw;
     }
 
     /// Records the key-down of the hotkey that started `gesture`.

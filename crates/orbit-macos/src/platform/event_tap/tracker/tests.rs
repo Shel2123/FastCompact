@@ -515,12 +515,14 @@ fn fences_outlive_a_restart_of_the_tap() {
         panic!("fence not registered")
     };
     // The tap is removed and created again; its marker never arrives.
+    h.hold();
     h.send(TapEvent::TapDisabled);
     h.tracker = GestureTracker::new(Arc::clone(&log));
     assert_eq!(lost.wait(SHORT), FenceOutcome::TimedOut);
 
-    h.hold();
-    assert_eq!(h.guard(A), Guard::Clean);
+    // Gesture ids go on where the old tap stopped.
+    assert_eq!(h.hold(), B);
+    assert_eq!(h.guard(B), Guard::Clean);
 }
 
 #[test]
@@ -549,7 +551,7 @@ fn failed_markers_cancel_the_gesture() {
 #[test]
 fn gesture_ids_wrap() {
     let mut h = Harness::new();
-    h.tracker.next_gesture = u64::MAX;
+    h.log.set_next_gesture(u64::MAX);
     assert_eq!(h.hold(), GestureId(u64::MAX));
     h.space_up(HERE);
     h.deliver();

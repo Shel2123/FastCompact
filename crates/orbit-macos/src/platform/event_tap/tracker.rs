@@ -297,7 +297,6 @@ enum Hold {
 pub struct GestureTracker {
     log: Arc<InputLog>,
     hold: Hold,
-    next_gesture: u64,
     /// Key-down (without autorepeat) and key-up events seen, swallowed ones
     /// included.
     keyboard_seen: u64,
@@ -313,7 +312,6 @@ impl GestureTracker {
         Self {
             log,
             hold: Hold::Idle,
-            next_gesture: 1,
             keyboard_seen: 0,
             buttons: 0,
             escape_swallowed: false,
@@ -418,18 +416,12 @@ impl GestureTracker {
         out
     }
 
-    fn issue(&mut self) -> GestureId {
-        let gesture = GestureId(self.next_gesture);
-        self.next_gesture = self.next_gesture.wrapping_add(1);
-        gesture
-    }
-
     fn press(&mut self, seq: u64, point: QuartzPoint, io: &mut impl TapIo, out: &mut Outcome) {
         if let Hold::Held { gesture, .. } | Hold::Releasing { gesture, .. } = self.hold {
             warn!(?gesture, "new press before the release was confirmed");
             self.end(out);
         }
-        let gesture = self.issue();
+        let gesture = self.log.next_gesture();
         let hid = io.keyboard_counter();
         let button_held = self.buttons != 0 || io.button_held();
         self.log.record_press(gesture, Press { seq, button_held });
