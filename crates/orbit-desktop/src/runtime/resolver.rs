@@ -94,7 +94,6 @@ fn serve<R: TargetResolver>(
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
-    use std::time::Instant;
 
     use orbit_app::messages::GestureId;
     use orbit_domain::target::FileTarget;
@@ -125,7 +124,6 @@ mod tests {
     fn request(id: u64) -> ResolveRequest {
         ResolveRequest {
             gesture: GestureId(id),
-            pressed_at: Instant::now(),
         }
     }
 

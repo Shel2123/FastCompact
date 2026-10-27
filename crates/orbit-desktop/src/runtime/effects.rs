@@ -23,14 +23,8 @@ pub struct Services {
 /// through the sink, never by calling it directly.
 pub fn execute(effect: Effect, services: &mut Services) {
     match effect {
-        Effect::ResolveTarget {
-            gesture,
-            pressed_at,
-        } => {
-            let request = ResolveRequest {
-                gesture,
-                pressed_at,
-            };
+        Effect::ResolveTarget { gesture } => {
+            let request = ResolveRequest { gesture };
             if services.resolver.request(request).is_err() {
                 error!(?gesture, "resolver thread is stopped");
                 services.sink.send(AppEvent::TargetResolved {

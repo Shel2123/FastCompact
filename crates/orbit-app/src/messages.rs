@@ -3,16 +3,15 @@
 //! # Gesture events
 //!
 //! Every press of the hotkey is one gesture with its own [`GestureId`],
-//! issued by the hotkey adapter on the main thread: a counter that grows only
-//! when the key goes down. A repeated press while the key is held keeps the
-//! id. Every event of a gesture carries the id of its press, so an event left
+//! issued by the event tap on its own thread when it sees the key go down: a
+//! counter that grows with each press. Autorepeat of a held key starts no new
+//! gesture. Every event of a gesture carries the id of its press, so an event left
 //! over from an earlier gesture is told apart from the current one even if it
 //! arrives late. The same id names the whole scenario: the target request,
 //! the menu and the parameters form.
 
 use std::io;
 use std::path::PathBuf;
-use std::time::Instant;
 
 use orbit_domain::geometry::{ScreenPoint, ScreenRect};
 use orbit_domain::operation::{Destination, NameError, OperationSpec, ResizeBound, ResizeError};
@@ -23,6 +22,9 @@ use crate::catalog::MenuModel;
 use crate::state::Highlight;
 
 /// One press of the hotkey, from key down to key up.
+///
+/// Issued by the event tap for the key-down of the hotkey; see the module
+/// documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GestureId(pub u64);
 
@@ -56,17 +58,21 @@ impl JobId {
 /// Something that happened, sent to the controller on the main thread.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppEvent {
-    /// The hotkey was pressed, or a press repeated while it is held.
+    /// The hotkey was pressed.
     Invoked {
         /// The press.
         gesture: GestureId,
-        /// Cursor position read in the hotkey callback (I1).
+        /// Cursor position of the key-down event itself (I1).
         point: ScreenPoint,
         /// Visible frames of all displays.
         screens: Vec<ScreenRect>,
-        /// When the key went down, from the event tap; the target resolver
-        /// guards the selection against input after this moment.
-        pressed_at: Instant,
+    },
+    /// The hotkey was pressed, but no gesture can start, for example
+    /// because secure keyboard entry hides the key from the event tap.
+    /// Starts and ends no gesture; dropped while a gesture is held.
+    InvokeRefused {
+        /// Why the gesture cannot start.
+        reason: ResolveError,
     },
     /// The cursor moved during a gesture.
     PointerMoved {
@@ -137,8 +143,6 @@ pub enum Effect {
     ResolveTarget {
         /// The press; the answer must carry it.
         gesture: GestureId,
-        /// When the key went down, for the selection guard.
-        pressed_at: Instant,
     },
     /// Show the radial menu.
     PresentMenu(MenuModel),
@@ -203,6 +207,10 @@ pub enum ResolveError {
     /// Input Monitoring access is not granted; the selection guard needs it.
     #[error("Input Monitoring access is not granted")]
     InputMonitoringDenied,
+    /// Secure keyboard entry is on, so the hotkey and the input after it
+    /// cannot be observed.
+    #[error("secure keyboard entry is on")]
+    SecureInputOn,
     /// Any other failure of the platform.
     #[error("the target could not be read: {0}")]
     Failed(String),

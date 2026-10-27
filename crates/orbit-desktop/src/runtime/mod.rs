@@ -174,7 +174,6 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
 
     use orbit_app::messages::{GestureId, JobError, JobOutput, JobSpec, ResolveError};
     use orbit_app::ports::{JobContext, ResolveRequest};
@@ -223,7 +222,6 @@ mod tests {
             gesture,
             point: ScreenPoint::new(700.0, 400.0),
             screens: vec![ScreenRect::new(0.0, 0.0, 1440.0, 875.0)],
-            pressed_at: Instant::now(),
         }
     }
 

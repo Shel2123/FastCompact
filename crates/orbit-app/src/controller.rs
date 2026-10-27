@@ -10,7 +10,6 @@
 //! same id. Anything else is a leftover and is dropped without effects (I4).
 
 use std::mem;
-use std::time::Instant;
 
 use orbit_domain::action::{ActionId, MenuItem};
 use orbit_domain::geometry::{Hit, MenuGeometry, ScreenPoint, ScreenRect, place_menu};
@@ -62,8 +61,8 @@ impl AppController {
                 gesture,
                 point,
                 screens,
-                pressed_at,
-            } => self.invoked(gesture, point, &screens, pressed_at, &mut effects),
+            } => self.invoked(gesture, point, &screens, &mut effects),
+            AppEvent::InvokeRefused { reason } => self.invoke_refused(reason, &mut effects),
             AppEvent::PointerMoved { gesture, point } => {
                 self.pointer_moved(gesture, point, &mut effects);
             }
@@ -94,7 +93,6 @@ impl AppController {
         gesture: GestureId,
         point: ScreenPoint,
         screens: &[ScreenRect],
-        pressed_at: Instant,
         effects: &mut Vec<Effect>,
     ) {
         match self.state.gesture {
@@ -127,10 +125,15 @@ impl AppController {
             center,
             cursor: None,
         };
-        effects.push(Effect::ResolveTarget {
-            gesture,
-            pressed_at,
-        });
+        effects.push(Effect::ResolveTarget { gesture });
+    }
+
+    fn invoke_refused(&mut self, reason: ResolveError, effects: &mut Vec<Effect>) {
+        if let Some(held) = self.state.gesture {
+            debug!(?held, %reason, "refused press while a gesture is held dropped");
+            return;
+        }
+        effects.push(Effect::Notify(Notice::Refused(reason)));
     }
 
     fn target_resolved(
@@ -628,14 +631,12 @@ mod tests {
 
     struct Harness {
         controller: AppController,
-        pressed_at: Instant,
     }
 
     impl Harness {
         fn new() -> Self {
             Self {
                 controller: AppController::new(),
-                pressed_at: Instant::now(),
             }
         }
 
@@ -656,15 +657,11 @@ mod tests {
                 gesture,
                 point,
                 screens: vec![SCREEN],
-                pressed_at: self.pressed_at,
             })
         }
 
-        fn resolve_target(&self, gesture: GestureId) -> Effect {
-            Effect::ResolveTarget {
-                gesture,
-                pressed_at: self.pressed_at,
-            }
+        fn resolve_target(gesture: GestureId) -> Effect {
+            Effect::ResolveTarget { gesture }
         }
 
         fn resolve(
@@ -685,7 +682,7 @@ mod tests {
         ) -> ScreenPoint {
             assert_eq!(
                 self.invoke(gesture, point),
-                vec![self.resolve_target(gesture)]
+                vec![Self::resolve_target(gesture)]
             );
             match self.resolve(gesture, Ok(target)).as_slice() {
                 [Effect::PresentMenu(model)] => model.center,
@@ -729,7 +726,7 @@ mod tests {
     #[test]
     fn copy_path_runs_on_release_over_its_slot() {
         let mut h = Harness::new();
-        assert_eq!(h.invoke(A, MIDDLE), vec![h.resolve_target(A)]);
+        assert_eq!(h.invoke(A, MIDDLE), vec![Harness::resolve_target(A)]);
         assert!(matches!(h.menu(), MenuState::Resolving { gesture: A, .. }));
 
         let effects = h.resolve(A, Ok(plain("/Users/me/a b.txt")));
@@ -824,7 +821,7 @@ mod tests {
         let mut h = Harness::new();
         h.invoke(A, MIDDLE);
         h.release(A, MIDDLE);
-        assert_eq!(h.invoke(B, MIDDLE), vec![h.resolve_target(B)]);
+        assert_eq!(h.invoke(B, MIDDLE), vec![Harness::resolve_target(B)]);
         assert_eq!(h.resolve(A, Ok(plain("/tmp/a"))), vec![]);
         assert!(matches!(h.menu(), MenuState::Resolving { gesture: B, .. }));
         assert!(matches!(
@@ -876,7 +873,7 @@ mod tests {
         // Only a new press after the release starts again.
         h.release(c, MIDDLE);
         let d = GestureId(4);
-        assert_eq!(h.invoke(d, MIDDLE), vec![h.resolve_target(d)]);
+        assert_eq!(h.invoke(d, MIDDLE), vec![Harness::resolve_target(d)]);
     }
 
     #[test]
@@ -906,7 +903,7 @@ mod tests {
         h.move_to(A, slot_point(center, slot_of(ActionId::CopyPath)));
         assert_eq!(
             h.invoke(B, MIDDLE),
-            vec![Effect::HideMenu, h.resolve_target(B)]
+            vec![Effect::HideMenu, Harness::resolve_target(B)]
         );
         assert_eq!(h.held(), Some(B));
         assert_eq!(h.release(A, MIDDLE), vec![]);
@@ -991,6 +988,43 @@ mod tests {
     }
 
     #[test]
+    fn refused_press_without_a_gesture_tells_the_reason() {
+        let mut h = Harness::new();
+        assert_eq!(
+            h.send(AppEvent::InvokeRefused {
+                reason: ResolveError::SecureInputOn,
+            }),
+            vec![Effect::Notify(Notice::Refused(ResolveError::SecureInputOn))]
+        );
+        assert_eq!(h.held(), None);
+        assert_eq!(h.menu(), &MenuState::Closed);
+        assert_eq!(h.invoke(A, MIDDLE), vec![Harness::resolve_target(A)]);
+    }
+
+    #[test]
+    fn refused_press_while_a_gesture_is_held_is_dropped() {
+        let mut h = Harness::new();
+        h.invoke(A, MIDDLE);
+        let refused = AppEvent::InvokeRefused {
+            reason: ResolveError::Failed("hotkey was not seen by the event tap".into()),
+        };
+        assert_eq!(h.send(refused.clone()), vec![]);
+        assert_eq!(h.held(), Some(A));
+        assert!(matches!(h.menu(), MenuState::Resolving { gesture, .. } if *gesture == A));
+
+        let center = match h.resolve(A, Ok(plain("/tmp/a"))).as_slice() {
+            [Effect::PresentMenu(model)] => model.center,
+            other => panic!("menu not presented: {other:?}"),
+        };
+        assert_eq!(h.send(refused), vec![]);
+        let copy = slot_point(center, slot_of(ActionId::CopyPath));
+        assert_eq!(
+            h.release(A, copy),
+            vec![Effect::HideMenu, Effect::WriteClipboard("/tmp/a".into())]
+        );
+    }
+
+    #[test]
     fn refusals_close_the_gesture_with_a_reason() {
         let errors = [
             ResolveError::FinderNotFrontmost,
@@ -1000,6 +1034,7 @@ mod tests {
             ResolveError::SelectionUnstable,
             ResolveError::AccessibilityDenied,
             ResolveError::InputMonitoringDenied,
+            ResolveError::SecureInputOn,
             ResolveError::Failed("AXError(-25204)".into()),
         ];
         for error in errors {
@@ -1040,7 +1075,7 @@ mod tests {
         assert_eq!(h.held(), None);
         assert_eq!(
             h.invoke(B, MIDDLE),
-            vec![Effect::HideParameters, h.resolve_target(B)]
+            vec![Effect::HideParameters, Harness::resolve_target(B)]
         );
         assert_eq!(
             h.submit(A, ParameterInput::Rename("new.txt".into())),
@@ -1328,7 +1363,6 @@ mod tests {
             gesture: A,
             point: MIDDLE,
             screens: Vec::new(),
-            pressed_at: h.pressed_at,
         });
         assert!(matches!(
             h.menu(),

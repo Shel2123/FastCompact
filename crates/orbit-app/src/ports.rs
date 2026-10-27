@@ -6,7 +6,6 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 use orbit_domain::target::FileTarget;
 
@@ -31,10 +30,9 @@ pub trait EventSink: Send + Sync {
 /// A request to read the target of a gesture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolveRequest {
-    /// The press; the answer carries it.
+    /// The press; the answer carries it. The resolver guards the selection
+    /// against input observed after this press.
     pub gesture: GestureId,
-    /// When the key went down, for the selection guard.
-    pub pressed_at: Instant,
 }
 
 /// Reads the target of a gesture.
