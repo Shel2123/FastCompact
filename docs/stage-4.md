@@ -42,8 +42,10 @@ tail -f ~/Library/Logs/Orbit/orbit.log
 ```sh
 tail -n0 -F ~/Library/Logs/Orbit/orbit.log \
   | grep -m1 "event tap disabled" \
-  && pkill -KILL -f "Orbit.app/Contents/MacOS/orbit"
+  && pkill -KILL -f "Orbit.app/Contents/MacOS/[o]rbit"
 ```
+
+Шаблон `[o]rbit` попадает в процесс Orbit, но не в саму команду страховки: иначе её убьёт `scripts/bundle.sh` при перезапуске.
 
 Ожидаемо страховка не срабатывает: при отзыве в логе `accessibility lost; removing the event tap`, затем `event tap removed`.
 
