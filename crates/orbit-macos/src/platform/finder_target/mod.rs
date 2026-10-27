@@ -110,7 +110,7 @@ impl TargetResolver for FinderSelectionResolver {
             gesture = request.gesture.0,
             ?guard,
             elapsed = ?started.elapsed(),
-            ok = result.is_ok(),
+            kind = ?result.as_ref().map(|target| target.facts.kind).ok(),
             "target resolved"
         );
         result
