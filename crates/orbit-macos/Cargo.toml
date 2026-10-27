@@ -10,6 +10,7 @@ publish.workspace = true
 orbit-app.workspace = true
 orbit-domain.workspace = true
 dispatch2.workspace = true
+global-hotkey.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "std",
