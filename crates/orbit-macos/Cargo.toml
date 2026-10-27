@@ -19,25 +19,31 @@ objc2-app-kit = { workspace = true, features = [
     "NSMenu",
     "NSMenuItem",
     "NSResponder",
+    "NSRunningApplication",
     "NSScreen",
     "NSStatusBar",
     "NSStatusBarButton",
     "NSStatusItem",
     "NSView",
+    "NSWorkspace",
 ] }
 objc2-application-services = { workspace = true, features = [
     "std",
     "libc",
+    "AXError",
+    "AXUIElement",
     "HIServices",
 ] }
 objc2-core-foundation = { workspace = true, features = [
     "std",
+    "CFArray",
     "CFDate",
     "CFDictionary",
     "CFMachPort",
     "CFNumber",
     "CFRunLoop",
     "CFString",
+    "CFURL",
 ] }
 objc2-core-graphics = { workspace = true, features = [
     "std",
@@ -48,7 +54,14 @@ objc2-core-graphics = { workspace = true, features = [
     "CGEventTypes",
     "CGRemoteOperation",
 ] }
-objc2-foundation = { workspace = true, features = ["std", "NSGeometry", "NSString"] }
+objc2-foundation = { workspace = true, features = [
+    "std",
+    "NSError",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+    "NSValue",
+] }
 thiserror.workspace = true
 tracing.workspace = true
 
