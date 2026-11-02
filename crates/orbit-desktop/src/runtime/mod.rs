@@ -11,6 +11,7 @@ use std::sync::Arc;
 use orbit_app::controller::AppController;
 use orbit_app::messages::AppEvent;
 use orbit_app::ports::{EventSink, OperationExecutor, TargetResolver};
+use orbit_domain::operation::FileNamePolicy;
 
 use effects::Services;
 use jobs::JobRunner;
@@ -40,7 +41,7 @@ impl Runtime {
         let resolver = ResolverThread::spawn(make_resolver, Arc::clone(&sink))?;
         let jobs = JobRunner::new(executor, Arc::clone(&sink), jobs)?;
         Ok(Self {
-            controller: AppController::new(),
+            controller: AppController::new(FileNamePolicy::UNIVERSAL.forbidding(&[':'])),
             services: Services {
                 resolver,
                 jobs,

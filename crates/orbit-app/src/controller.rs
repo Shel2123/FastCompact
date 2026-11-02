@@ -13,7 +13,7 @@ use std::mem;
 
 use orbit_domain::action::{ActionId, MenuItem};
 use orbit_domain::geometry::{Hit, MenuGeometry, ScreenPoint, ScreenRect, place_menu};
-use orbit_domain::operation::{FileName, OperationSpec, ResizeBound};
+use orbit_domain::operation::{FileName, FileNamePolicy, OperationSpec, ResizeBound};
 use orbit_domain::target::{FileTarget, PixelSize};
 use tracing::{debug, warn};
 
@@ -30,21 +30,18 @@ pub struct AppController {
     state: AppState,
     geometry: MenuGeometry,
     next_job: JobId,
-}
-
-impl Default for AppController {
-    fn default() -> Self {
-        Self::new()
-    }
+    names: FileNamePolicy,
 }
 
 impl AppController {
     /// A controller with nothing open and the standard menu geometry.
-    pub fn new() -> Self {
+    /// `names` is the platform's rule for names typed in the Rename form.
+    pub fn new(names: FileNamePolicy) -> Self {
         Self {
             state: AppState::default(),
             geometry: MenuGeometry::standard(),
             next_job: JobId::FIRST,
+            names,
         }
     }
 
@@ -359,7 +356,7 @@ impl AppController {
         }
         let decision = match (kind, input) {
             (ParametersKind::Rename { .. }, ParameterInput::Rename(text)) => {
-                rename_operation(target, &text)
+                rename_operation(target, &text, &self.names)
             }
             (ParametersKind::Resize { size }, ParameterInput::Resize(bound)) => {
                 resize_operation(*size, bound).map(Some)
@@ -514,8 +511,9 @@ fn highlight_at(
 fn rename_operation(
     target: &FileTarget,
     text: &str,
+    names: &FileNamePolicy,
 ) -> Result<Option<OperationSpec>, ParameterError> {
-    let new_name = FileName::new(text)?;
+    let new_name = FileName::new(text, names)?;
     let unchanged = target
         .path
         .file_name()
@@ -546,6 +544,9 @@ mod tests {
 
     use orbit_domain::action::{CANCEL_SLOT, MENU_LAYOUT};
     use orbit_domain::operation::{Destination, NameError, OutputFormat};
+
+    /// What the macOS adapter passes in production.
+    const MACOS_NAMES: FileNamePolicy = FileNamePolicy::UNIVERSAL.forbidding(&[':']);
     use orbit_domain::target::{
         FileFacts, FileIdentity, FileKind, FileVersion, ImageFacts, ImageFormat,
     };
@@ -636,7 +637,7 @@ mod tests {
     impl Harness {
         fn new() -> Self {
             Self {
-                controller: AppController::new(),
+                controller: AppController::new(MACOS_NAMES),
             }
         }
 
@@ -1106,7 +1107,7 @@ mod tests {
             ("   ", NameError::Empty),
             ("..", NameError::Reserved),
             ("a/b", NameError::ContainsSlash),
-            ("a:b", NameError::ContainsColon),
+            ("a:b", NameError::ContainsForbidden(':')),
             ("a\0b", NameError::ContainsNul),
         ];
         for (text, error) in invalid {
@@ -1128,7 +1129,7 @@ mod tests {
         let effects = h.submit(A, ParameterInput::Rename("отчёт.txt".into()));
         assert_eq!(effects.first(), Some(&Effect::HideParameters));
         let spec = started(&effects);
-        let Ok(new_name) = FileName::new("отчёт.txt") else {
+        let Ok(new_name) = FileName::new("отчёт.txt", &MACOS_NAMES) else {
             panic!("valid name");
         };
         assert_eq!(
@@ -1139,6 +1140,19 @@ mod tests {
         );
         assert_eq!(spec.destination, Destination::Exact(new_name));
         assert_eq!(h.menu(), &MenuState::Closed);
+    }
+
+    #[test]
+    fn rename_follows_the_policy_of_the_platform() {
+        let mut h = Harness::new();
+        h.controller = AppController::new(FileNamePolicy::UNIVERSAL);
+        h.choose(A, plain("/tmp/report.txt"), ActionId::Rename);
+        let effects = h.submit(A, ParameterInput::Rename("a:b".into()));
+        let spec = started(&effects);
+        assert!(matches!(
+            &spec.operation,
+            OperationSpec::Rename { new_name } if new_name.as_str() == "a:b"
+        ));
     }
 
     #[test]

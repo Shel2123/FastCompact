@@ -206,9 +206,33 @@ impl ExactSizeIterator for NameCandidates {}
 
 impl FusedIterator for NameCandidates {}
 
+/// Names a platform refuses on top of the rules that hold everywhere.
+///
+/// The platform adapter chooses it; the controller only applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileNamePolicy {
+    forbidden: &'static [char],
+}
+
+impl FileNamePolicy {
+    /// Only the rules that hold on every platform.
+    pub const UNIVERSAL: Self = Self { forbidden: &[] };
+
+    /// The same policy that also refuses every character of `forbidden`.
+    #[must_use]
+    pub const fn forbidding(self, forbidden: &'static [char]) -> Self {
+        Self { forbidden }
+    }
+
+    /// The first character of `name` that the platform refuses.
+    fn first_forbidden(&self, name: &str) -> Option<char> {
+        name.chars().find(|c| self.forbidden.contains(c))
+    }
+}
+
 /// A new name for Rename that passes the structural checks.
 ///
-/// Only rules that hold on every volume are checked here. Length limits and
+/// Only the rules of a [`FileNamePolicy`] are checked here. Length limits and
 /// which names the volume treats as the same (case, Unicode normalization)
 /// are decided when the rename runs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -218,13 +242,15 @@ impl FileName {
     /// Checks a name typed by the user.
     ///
     /// Leading and trailing spaces are kept, and a leading dot is allowed,
-    /// although Finder then hides the file.
+    /// although a file manager may then hide the file.
     ///
     /// # Errors
     ///
-    /// See [`NameError`]. `:` is refused on purpose: Finder shows it as `/`,
-    /// so the file would not look like the name that was typed.
-    pub fn new(name: &str) -> Result<Self, NameError> {
+    /// See [`NameError`]. Besides the rules that hold everywhere, the
+    /// characters of `policy` are refused; macOS refuses `:` because Finder
+    /// shows it as `/`, so the file would not look like the name that was
+    /// typed.
+    pub fn new(name: &str, policy: &FileNamePolicy) -> Result<Self, NameError> {
         if name.trim().is_empty() {
             Err(NameError::Empty)
         } else if name == "." || name == ".." {
@@ -233,8 +259,8 @@ impl FileName {
             Err(NameError::ContainsNul)
         } else if name.contains('/') {
             Err(NameError::ContainsSlash)
-        } else if name.contains(':') {
-            Err(NameError::ContainsColon)
+        } else if let Some(character) = policy.first_forbidden(name) {
+            Err(NameError::ContainsForbidden(character))
         } else {
             Ok(Self(name.to_owned()))
         }
@@ -281,9 +307,9 @@ pub enum NameError {
     /// `/` separates folders in a path.
     #[error("the name contains “/”")]
     ContainsSlash,
-    /// Finder shows `:` as `/`.
-    #[error("the name contains “:”, which Finder shows as “/”")]
-    ContainsColon,
+    /// The platform does not allow this character in a name.
+    #[error("the name contains “{0}”, which this platform does not allow")]
+    ContainsForbidden(char),
 }
 
 /// The side a resize fixes; the other side keeps the proportions.
@@ -347,7 +373,8 @@ mod tests {
     }
 
     fn name(value: &str) -> FileName {
-        FileName::new(value).unwrap_or_else(|err| panic!("{value:?}: {err}"))
+        FileName::new(value, &FileNamePolicy::UNIVERSAL)
+            .unwrap_or_else(|err| panic!("{value:?}: {err}"))
     }
 
     /// The first `count` candidates as strings.
@@ -489,11 +516,33 @@ mod tests {
             ("a\0b", NameError::ContainsNul),
             ("a/b", NameError::ContainsSlash),
             ("/", NameError::ContainsSlash),
-            ("a:b", NameError::ContainsColon),
         ];
         for (value, expected) in cases {
-            assert_eq!(FileName::new(value), Err(expected), "{value:?}");
+            assert_eq!(
+                FileName::new(value, &FileNamePolicy::UNIVERSAL),
+                Err(expected),
+                "{value:?}"
+            );
         }
+    }
+
+    #[test]
+    fn policy_adds_its_characters_to_the_universal_rules() {
+        let policy = FileNamePolicy::UNIVERSAL.forbidding(&[':', '?']);
+        for (value, character) in [("a:b", ':'), ("what?", '?'), ("ok:then?", ':')] {
+            assert_eq!(
+                FileName::new(value, &policy),
+                Err(NameError::ContainsForbidden(character)),
+                "{value:?}"
+            );
+        }
+        // The universal rules still apply first.
+        assert_eq!(
+            FileName::new("a/b:c", &policy),
+            Err(NameError::ContainsSlash)
+        );
+        // Without the policy the characters are fine.
+        assert_eq!(name("a:b").as_str(), "a:b");
     }
 
     #[test]

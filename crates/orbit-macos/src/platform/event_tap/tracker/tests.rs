@@ -5,6 +5,7 @@ use orbit_app::controller::AppController;
 use orbit_app::messages::{AppEvent, Effect};
 use orbit_domain::action::{ActionId, MENU_LAYOUT, MenuItem};
 use orbit_domain::geometry::{MenuGeometry, ScreenPoint, ScreenRect};
+use orbit_domain::operation::FileNamePolicy;
 use orbit_domain::target::{FileFacts, FileIdentity, FileKind, FileTarget, FileVersion};
 
 use super::super::log::{FenceOutcome, Guard};
@@ -638,7 +639,7 @@ fn over_copy_path(center: ScreenPoint) -> QuartzPoint {
 
 fn gesture_over_copy_path(lose_space_up: bool) -> Vec<Effect> {
     let mut h = Harness::new();
-    let mut controller = AppController::new();
+    let mut controller = AppController::new(FileNamePolicy::UNIVERSAL);
     let mut effects = drive(&mut controller, h.hotkey());
     let center = match effects.as_slice() {
         [Effect::PresentMenu(model)] => model.center,
