@@ -163,7 +163,7 @@ pub enum Effect {
     HideParameters,
     /// Put the path on the clipboard.
     WriteClipboard(PathBuf),
-    /// Show the object in Finder.
+    /// Show the object in the file manager.
     RevealFile(PathBuf),
     /// Show information about the target.
     ShowInfo(FileTarget),
@@ -186,11 +186,11 @@ pub enum Effect {
 /// file in that case.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ResolveError {
-    /// Finder is not the active application.
-    #[error("Finder is not the active application")]
-    FinderNotFrontmost,
+    /// The file manager is not the active application.
+    #[error("the file manager is not the active application")]
+    FileManagerNotActive,
     /// Focus is outside the file area, such as in the sidebar or a preview.
-    #[error("focus is outside the file area of Finder")]
+    #[error("focus is outside the file area of the file manager")]
     OutsideFileArea,
     /// Nothing is selected.
     #[error("nothing is selected")]

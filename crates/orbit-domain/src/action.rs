@@ -19,7 +19,7 @@ pub enum ActionId {
     ConvertToPng,
     /// Create a JPEG copy of an image.
     ConvertToJpeg,
-    /// Show the object in Finder.
+    /// Show the object in the file manager.
     Reveal,
 }
 

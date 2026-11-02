@@ -136,14 +136,14 @@ pub fn unready(status: &TapStatus) -> Option<ResolveError> {
 fn frontmost_finder() -> Result<i32, ResolveError> {
     let app = NSWorkspace::sharedWorkspace()
         .frontmostApplication()
-        .ok_or(ResolveError::FinderNotFrontmost)?;
+        .ok_or(ResolveError::FileManagerNotActive)?;
     let is_finder = app
         .bundleIdentifier()
         .is_some_and(|id| id.to_string() == FINDER);
     if is_finder {
         Ok(app.processIdentifier())
     } else {
-        Err(ResolveError::FinderNotFrontmost)
+        Err(ResolveError::FileManagerNotActive)
     }
 }
 
@@ -201,7 +201,7 @@ mod tests {
             ResolveError::OutsideFileArea,
             ResolveError::NothingSelected,
             ResolveError::MultipleSelected,
-            ResolveError::FinderNotFrontmost,
+            ResolveError::FileManagerNotActive,
         ] {
             assert_eq!(judge(Err(err.clone()), Guard::Clean), Err(err));
         }

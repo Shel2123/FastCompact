@@ -96,7 +96,8 @@ pub enum FileKind {
     File,
     /// A folder.
     Directory,
-    /// A folder that Finder presents as a single file, such as an app bundle.
+    /// A folder that the file manager presents as a single file, such as a
+    /// macOS app bundle. Only macOS produces it.
     Package,
     /// A symbolic link; the target is the link itself, not what it points to.
     Symlink,

@@ -1027,7 +1027,7 @@ mod tests {
     #[test]
     fn refusals_close_the_gesture_with_a_reason() {
         let errors = [
-            ResolveError::FinderNotFrontmost,
+            ResolveError::FileManagerNotActive,
             ResolveError::OutsideFileArea,
             ResolveError::NothingSelected,
             ResolveError::MultipleSelected,
