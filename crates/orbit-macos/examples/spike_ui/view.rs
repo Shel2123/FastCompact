@@ -121,20 +121,34 @@ impl MenuPanel {
             NSPoint::new(SIZE / 2.0 - outer, SIZE / 2.0 - outer),
             NSSize::new(outer * 2.0, outer * 2.0),
         );
-        let glass = background_view(mtm, config.background, disc, outer);
+        // The drawing lives in its own view, above the background. For glass
+        // it is the glass view's `contentView`, the supported way to put
+        // content on top of the glass; its coordinates start at the disc.
+        let on_glass = config.background == Background::Glass;
+        let overlay_frame = if on_glass {
+            NSRect::new(NSPoint::new(0.0, 0.0), disc.size)
+        } else {
+            frame
+        };
+        let overlay = NSView::initWithFrame(NSView::alloc(mtm), overlay_frame);
+        overlay.setWantsLayer(true);
+        let glass = background_view(mtm, config.background, disc, outer, &overlay);
         if let Some(view) = &glass {
             content.addSubview(view);
         }
-
-        // The drawing lives in its own view added after the glass, so that
-        // the glass can never sit above the sectors and blur them.
-        let overlay = NSView::initWithFrame(NSView::alloc(mtm), frame);
-        overlay.setWantsLayer(true);
-        content.addSubview(&overlay);
+        if !on_glass {
+            content.addSubview(&overlay);
+        }
+        // Centre of the menu in the coordinates of the overlay.
+        let centre = if on_glass {
+            NSPoint::new(outer, outer)
+        } else {
+            NSPoint::new(SIZE / 2.0, SIZE / 2.0)
+        };
         let root = overlay.layer();
         let container = CALayer::new();
         container.setBounds(frame);
-        container.setPosition(NSPoint::new(SIZE / 2.0, SIZE / 2.0));
+        container.setPosition(centre);
         container.setContentsScale(scale);
 
         // Fallback disc for Reduce Transparency and `plain`.
@@ -332,11 +346,13 @@ fn background_view(
     background: Background,
     disc: NSRect,
     outer: f64,
+    overlay: &NSView,
 ) -> Option<Retained<NSView>> {
     match background {
         Background::Glass => {
             let view = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), disc);
             view.setCornerRadius(outer);
+            view.setContentView(Some(overlay));
             Some(Retained::into_super(view))
         }
         Background::Vibrancy => {
