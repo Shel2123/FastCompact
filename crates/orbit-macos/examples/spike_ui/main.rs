@@ -7,8 +7,8 @@
 //! Environment (all optional):
 //! - `ORBIT_SPIKE_UI_BACKGROUND`: `glass` (default), `vibrancy`, `plain`
 //! - `ORBIT_SPIKE_UI_ANIM`: `spring` (default), `ease`, `none`
-//! - `ORBIT_SPIKE_UI_DURATION_MS`: appearance duration (default 150)
-//! - `ORBIT_SPIKE_UI_BOUNCE`: spring bounce, 0 to 1 (default 0.15)
+//! - `ORBIT_SPIKE_UI_DURATION_MS`: appearance duration (default 700)
+//! - `ORBIT_SPIKE_UI_BOUNCE`: spring bounce, 0 to 1 (default 0.5)
 //! - `ORBIT_SPIKE_UI_HIGHLIGHT_MS`: highlight transition (default 70)
 //! - `ORBIT_SPIKE_UI_UNAVAILABLE`: comma-separated slots drawn unavailable
 //! - `ORBIT_SPIKE_UI_DUMP`: `1` logs the layer tree once at start
@@ -233,8 +233,8 @@ fn config_from_env() -> Config {
         background,
         appearance,
         unavailable,
-        bounce: number("ORBIT_SPIKE_UI_BOUNCE", 0.15),
-        duration: number("ORBIT_SPIKE_UI_DURATION_MS", 150.0) / 1000.0,
+        bounce: number("ORBIT_SPIKE_UI_BOUNCE", 0.5),
+        duration: number("ORBIT_SPIKE_UI_DURATION_MS", 700.0) / 1000.0,
         highlight_ms: number("ORBIT_SPIKE_UI_HIGHLIGHT_MS", 70.0),
     }
 }
