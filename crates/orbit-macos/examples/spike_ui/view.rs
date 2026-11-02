@@ -114,6 +114,8 @@ impl MenuPanel {
         content.setWantsLayer(true);
         window.setContentView(Some(&content));
 
+        // Layers made by hand start at contentsScale 1 and blur on Retina.
+        let scale = window.backingScaleFactor();
         let outer = geometry.outer_radius();
         let disc = NSRect::new(
             NSPoint::new(SIZE / 2.0 - outer, SIZE / 2.0 - outer),
@@ -124,15 +126,22 @@ impl MenuPanel {
             content.addSubview(view);
         }
 
-        let root = content.layer();
+        // The drawing lives in its own view added after the glass, so that
+        // the glass can never sit above the sectors and blur them.
+        let overlay = NSView::initWithFrame(NSView::alloc(mtm), frame);
+        overlay.setWantsLayer(true);
+        content.addSubview(&overlay);
+        let root = overlay.layer();
         let container = CALayer::new();
         container.setBounds(frame);
         container.setPosition(NSPoint::new(SIZE / 2.0, SIZE / 2.0));
+        container.setContentsScale(scale);
 
         // Fallback disc for Reduce Transparency and `plain`.
         let plain = CAShapeLayer::new();
         plain.setPath(Some(&disc_path(outer)));
         plain.setFillColor(Some(&srgb(0.12, 0.12, 0.14, 0.96)));
+        plain.setContentsScale(scale);
         plain.setHidden(config.background != Background::Plain);
         container.addSublayer(&plain);
 
@@ -143,10 +152,11 @@ impl MenuPanel {
         let mut icons = Vec::with_capacity(geometry.slots());
         for (slot, &is_available) in available.iter().enumerate() {
             let sector = CAShapeLayer::new();
+            sector.setContentsScale(scale);
             sector.setPath(Some(&sector_path(&geometry, slot)));
             container.addSublayer(&sector);
             sectors.push(sector);
-            let icon = icon_layer(&geometry, slot, is_available);
+            let icon = icon_layer(&geometry, slot, is_available, scale);
             container.addSublayer(&icon);
             icons.push(icon);
         }
@@ -442,11 +452,17 @@ fn symbol_name(item: MenuItem) -> &'static str {
 }
 
 /// An icon: a white layer masked by the symbol, so the symbol takes any color.
-fn icon_layer(geometry: &MenuGeometry, slot: usize, available: bool) -> Retained<CALayer> {
+fn icon_layer(
+    geometry: &MenuGeometry,
+    slot: usize,
+    available: bool,
+    scale: f64,
+) -> Retained<CALayer> {
     let angle = geometry.slot_center(slot);
     let radius = f64::midpoint(geometry.neutral_radius(), geometry.outer_radius());
     let c = SIZE / 2.0;
     let layer = CALayer::new();
+    layer.setContentsScale(scale);
     layer.setBounds(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ICON, ICON)));
     layer.setPosition(NSPoint::new(
         c + radius * angle.sin(),
@@ -460,9 +476,10 @@ fn icon_layer(geometry: &MenuGeometry, slot: usize, available: bool) -> Retained
     )));
 
     let name = symbol_name(MENU_LAYOUT[slot]);
-    match symbol_image(name) {
+    match symbol_image(name, scale) {
         Some((image, size)) => {
             let mask = CALayer::new();
+            mask.setContentsScale(scale);
             mask.setFrame(NSRect::new(
                 NSPoint::new((ICON - size.width) / 2.0, (ICON - size.height) / 2.0),
                 size,
@@ -477,18 +494,18 @@ fn icon_layer(geometry: &MenuGeometry, slot: usize, available: bool) -> Retained
     layer
 }
 
-/// The symbol rendered once, at twice its size, and its size in points.
-fn symbol_image(name: &str) -> Option<(Retained<CGImage>, NSSize)> {
+/// The symbol rendered once, at `scale` times its size, and its size in points.
+fn symbol_image(name: &str, scale: f64) -> Option<(Retained<CGImage>, NSSize)> {
     let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
         &NSString::from_str(name),
         None,
     )?;
     let natural = image.size();
-    let scale = (ICON - 6.0) / natural.width.max(natural.height).max(1.0);
-    let size = NSSize::new(natural.width * scale, natural.height * scale);
+    let fit = (ICON - 6.0) / natural.width.max(natural.height).max(1.0);
+    let size = NSSize::new(natural.width * fit, natural.height * fit);
     let mut rect = NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(size.width * 2.0, size.height * 2.0),
+        NSSize::new(size.width * scale, size.height * scale),
     );
     // SAFETY: `rect` is a valid pointer for the duration of the call.
     let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
