@@ -10,6 +10,8 @@ use orbit_app::messages::{AppEvent, ResolveError};
 use orbit_app::ports::{EventSink, ResolveRequest, TargetResolver};
 use tracing::{debug, error, info};
 
+use crate::platform::ResolverFactory;
+
 /// The resolver thread is not running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolverStopped;
@@ -27,17 +29,13 @@ pub struct ResolverThread {
 }
 
 impl ResolverThread {
-    /// Starts the thread. The resolver is made by `make` on that thread and
-    /// dropped there, so it does not have to be `Send`.
-    pub fn spawn<F, R>(make: F, sink: Arc<dyn EventSink>) -> io::Result<Self>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: TargetResolver + 'static,
-    {
+    /// Starts the thread. The resolver is made by `factory` on that thread
+    /// and dropped there, so it does not have to be `Send`.
+    pub fn spawn(factory: ResolverFactory, sink: Arc<dyn EventSink>) -> io::Result<Self> {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let thread = thread::Builder::new()
             .name("orbit-resolver".into())
-            .spawn(move || serve(make(), &receiver, sink.as_ref()))?;
+            .spawn(move || serve(factory.make(), &receiver, sink.as_ref()))?;
         Ok(Self {
             sender: Some(sender),
             thread: Some(thread),
@@ -68,8 +66,8 @@ impl ResolverThread {
     }
 }
 
-fn serve<R: TargetResolver>(
-    mut resolver: R,
+fn serve(
+    mut resolver: Box<dyn TargetResolver>,
     receiver: &Receiver<ResolveRequest>,
     sink: &dyn EventSink,
 ) {
@@ -99,7 +97,7 @@ mod tests {
     use orbit_domain::target::FileTarget;
 
     use super::*;
-    use crate::runtime::testing::{ChannelSink, Gate, plain};
+    use crate::testing::{ChannelSink, Gate, plain};
 
     /// Answers with a target named after the gesture. Holds an `Rc`, so it
     /// is not `Send`; it can run only because it is made on its thread.
@@ -130,11 +128,11 @@ mod tests {
     fn spawn(gate: Option<Gate>, panic_on: Option<GestureId>) -> (ResolverThread, ChannelSink) {
         let sink = ChannelSink::new();
         let thread = ResolverThread::spawn(
-            move || Fake {
+            ResolverFactory::new(move || Fake {
                 _not_send: Rc::new(()),
                 gate,
                 panic_on,
-            },
+            }),
             sink.shared(),
         );
         match thread {

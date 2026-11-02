@@ -233,7 +233,7 @@ mod tests {
     use orbit_domain::operation::OperationSpec;
 
     use super::*;
-    use crate::runtime::testing::{ChannelSink, Gate, plain};
+    use crate::testing::{ChannelSink, Gate, plain};
 
     /// An executor made of a closure.
     struct Fake<F>(F);

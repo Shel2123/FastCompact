@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 orbit-domain = { path = "crates/orbit-domain" }
 orbit-app = { path = "crates/orbit-app" }
+orbit-runtime = { path = "crates/orbit-runtime" }
 orbit-macos = { path = "crates/orbit-macos" }
 
 block2 = "0.6.2"

@@ -244,6 +244,7 @@ dependencies = [
  "orbit-app",
  "orbit-domain",
  "orbit-macos",
+ "orbit-runtime",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -274,6 +275,17 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "orbit-runtime"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "orbit-app",
+ "orbit-domain",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
