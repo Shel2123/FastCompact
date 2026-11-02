@@ -365,6 +365,23 @@ pub enum Notice {
         /// Why it failed.
         error: JobError,
     },
+    /// The platform could not carry out an instant action. Nothing else
+    /// changed; the controller is not told.
+    ActionFailed {
+        /// What was attempted.
+        action: ShellAction,
+        /// Why it failed, as reported by the platform.
+        message: String,
+    },
+}
+
+/// An instant action that the platform shell carries out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellAction {
+    /// Put the path on the clipboard.
+    CopyPath,
+    /// Show the object in the file manager.
+    Reveal,
 }
 
 #[cfg(test)]
