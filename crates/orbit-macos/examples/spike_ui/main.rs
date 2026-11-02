@@ -6,7 +6,7 @@
 //!
 //! Environment (all optional):
 //! - `ORBIT_SPIKE_UI_BACKGROUND`: `glass` (default), `vibrancy`, `plain`
-//! - `ORBIT_SPIKE_UI_ANIM`: `spring` (default), `ease`, `none`
+//! - `ORBIT_SPIKE_UI_ANIM`: `spring`, `ease`, `none` (default)
 //! - `ORBIT_SPIKE_UI_DURATION_MS`: appearance duration (default 700)
 //! - `ORBIT_SPIKE_UI_BOUNCE`: spring bounce, 0 to 1 (default 0.5)
 //! - `ORBIT_SPIKE_UI_HIGHLIGHT_MS`: highlight transition (default 70)
@@ -218,9 +218,9 @@ fn config_from_env() -> Config {
         _ => Background::Glass,
     };
     let appearance = match text("ORBIT_SPIKE_UI_ANIM").as_deref() {
+        Some("spring") => Appearance::Spring,
         Some("ease") => Appearance::Ease,
-        Some("none") => Appearance::None,
-        _ => Appearance::Spring,
+        _ => Appearance::None,
     };
     let unavailable = text("ORBIT_SPIKE_UI_UNAVAILABLE")
         .map(|list| {
