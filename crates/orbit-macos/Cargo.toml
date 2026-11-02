@@ -102,6 +102,14 @@ objc2-app-kit = { workspace = true, features = [
     "NSView",
     "NSWindow",
     "NSWorkspace",
+    "NSAccessibility",
+    "NSAppearance",
+    "NSGlassEffectView",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSVisualEffectView",
+    "objc2-quartz-core",
 ] }
 objc2-application-services = { workspace = true, features = [
     "std",
@@ -124,10 +132,14 @@ objc2-core-foundation = { workspace = true, features = [
 objc2-core-graphics = { workspace = true, features = [
     "std",
     "libc",
+    "CGAffineTransform",
+    "CGColor",
     "CGError",
     "CGEvent",
     "CGEventSource",
     "CGEventTypes",
+    "CGImage",
+    "CGPath",
     "CGRemoteOperation",
 ] }
 objc2-foundation = { workspace = true, features = [
@@ -141,11 +153,28 @@ objc2-foundation = { workspace = true, features = [
     "NSJSONSerialization",
     "NSString",
 ] }
+objc2-quartz-core = { workspace = true, features = [
+    "std",
+    "bitflags",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "CAAnimation",
+    "CAMediaTiming",
+    "CAMediaTimingFunction",
+    "CALayer",
+    "CAShapeLayer",
+    "CATransaction",
+    "CATransform3D",
+] }
 tracing-subscriber.workspace = true
 
 [[example]]
 name = "spike"
 path = "examples/spike/main.rs"
+
+[[example]]
+name = "spike_ui"
+path = "examples/spike_ui/main.rs"
 
 [[test]]
 name = "main_thread"

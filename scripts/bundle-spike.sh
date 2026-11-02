@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds, signs and launches the stage 0 spike as "Orbit Spike.app".
 #
-# Usage: scripts/bundle-spike.sh [--build-only]
+# Usage: scripts/bundle-spike.sh [--build-only] [--example spike|spike_ui]
+#   spike_ui: the stage 5 radial menu UI spike (docs/spike-5.md); same bundle id,
+#   so Accessibility access carries over.
 #
 # Environment:
 #   ORBIT_SIGN_IDENTITY          codesign identity (default "-", ad-hoc)
@@ -38,7 +40,16 @@ EXE_PATTERN="Orbit Spike.app/Contents/MacOS/spike"
 IDENTITY="${ORBIT_SIGN_IDENTITY:--}"
 LOG_DIR="$HOME/Library/Logs/Orbit"
 BUILD_ONLY=0
-[[ "${1:-}" == "--build-only" ]] && BUILD_ONLY=1
+EXAMPLE="spike"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --build-only) BUILD_ONLY=1 ;;
+        --example) EXAMPLE="${2:?--example needs a name}"; shift ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+case "$EXAMPLE" in spike|spike_ui) ;; *) echo "unknown example: $EXAMPLE" >&2; exit 2 ;; esac
 
 # 1. Stop the running instance and wait until it is gone, so the next launch
 #    is the new build and not the old process. SIGTERM avoids the Automation
@@ -59,13 +70,13 @@ fi
 # 2. Build with a fresh marker so the log proves which build is running.
 BUILD="$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
 echo "building spike $BUILD"
-ORBIT_SPIKE_BUILD="$BUILD" cargo build --manifest-path "$ROOT/Cargo.toml" -p orbit-macos --example spike
+ORBIT_SPIKE_BUILD="$BUILD" cargo build --manifest-path "$ROOT/Cargo.toml" -p orbit-macos --example "$EXAMPLE"
 
 # 3. Assemble and sign the bundle.
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$ROOT/resources/Spike-Info.plist" "$APP/Contents/Info.plist"
-cp "$ROOT/target/debug/examples/spike" "$APP/Contents/MacOS/spike"
+cp "$ROOT/target/debug/examples/$EXAMPLE" "$APP/Contents/MacOS/spike"
 codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 echo "designated requirement:"
