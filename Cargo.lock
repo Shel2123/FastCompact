@@ -237,12 +237,6 @@ dependencies = [
 name = "orbit-desktop"
 version = "0.1.0"
 dependencies = [
- "crossbeam-channel",
- "dispatch2",
- "objc2",
- "objc2-app-kit",
- "orbit-app",
- "orbit-domain",
  "orbit-macos",
  "orbit-runtime",
  "thiserror",
@@ -272,6 +266,7 @@ dependencies = [
  "objc2-foundation",
  "orbit-app",
  "orbit-domain",
+ "orbit-runtime",
  "thiserror",
  "tracing",
  "tracing-subscriber",

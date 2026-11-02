@@ -1,5 +1,4 @@
-//! Stand-ins for the ports that later stages implement: the operations
-//! (stage 7).
+//! Stand-in for the operations until stage 7.
 
 use orbit_app::messages::{JobError, JobOutput, JobSpec};
 use orbit_app::ports::{JobContext, OperationExecutor};

@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 orbit-app.workspace = true
 orbit-domain.workspace = true
+orbit-runtime.workspace = true
 dispatch2.workspace = true
 global-hotkey.workspace = true
 objc2.workspace = true
@@ -16,6 +17,7 @@ objc2-app-kit = { workspace = true, features = [
     "std",
     "libc",
     "objc2-core-foundation",
+    "NSApplication",
     "NSButton",
     "NSControl",
     "NSMenu",
@@ -82,6 +84,7 @@ objc2-app-kit = { workspace = true, features = [
     "objc2-core-graphics",
     "NSApplication",
     "NSBezierPath",
+    "NSApplication",
     "NSButton",
     "NSColor",
     "NSControl",

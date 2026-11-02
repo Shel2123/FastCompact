@@ -1,10 +1,6 @@
 //! Orbit entry point: creates and wires components.
 
-mod debug;
 mod instance;
-mod logging;
-mod platform;
-mod stubs;
 
 use std::error::Error;
 use std::fs::{self, OpenOptions};
@@ -13,14 +9,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Mutex;
 
+use orbit_macos::{MacOptions, MacPlatform};
 use orbit_runtime::{RuntimeConfig, run};
 use tracing::{error, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use debug::DebugSettings;
 use instance::{InstanceLock, LockError};
-use platform::MacPlatform;
 
 fn main() -> ExitCode {
     if let Err(err) = init_logging() {
@@ -44,7 +39,7 @@ fn start() -> Result<(), Box<dyn Error>> {
         }
         Err(err) => return Err(err.into()),
     };
-    let platform = MacPlatform::new(DebugSettings::from_env())?;
+    let platform = MacPlatform::new(MacOptions::from_env())?;
     run(platform, RuntimeConfig::default())?;
     Ok(())
 }

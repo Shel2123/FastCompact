@@ -1,4 +1,5 @@
-//! Switches for the manual checks of stage 4 (`docs/stage-4.md`).
+//! Options of the macOS platform, including the switches for the manual
+//! checks of stage 4 (`docs/stage-4.md`).
 //!
 //! Read from the environment in debug builds only; a release build always
 //! runs with the defaults.
@@ -12,9 +13,9 @@ use tracing::{info, warn};
 const PULSE_ON: Duration = Duration::from_millis(200);
 const PULSE_OFF: Duration = Duration::from_millis(700);
 
-/// Debug switches; all off by default.
+/// Options of [`MacPlatform`](crate::MacPlatform); all off by default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DebugSettings {
+pub struct MacOptions {
     /// `ORBIT_DEBUG_RESOLVE_DELAY_MS`: the resolver waits this long before
     /// each read.
     pub resolve_delay: Duration,
@@ -28,8 +29,9 @@ pub struct DebugSettings {
     pub no_poll: bool,
 }
 
-impl DebugSettings {
-    /// The switches set in the environment of a debug build.
+impl MacOptions {
+    /// The switches set in the environment of a debug build. A release build
+    /// always returns the defaults.
     pub fn from_env() -> Self {
         if !cfg!(debug_assertions) {
             return Self::default();

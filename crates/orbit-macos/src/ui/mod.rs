@@ -1,6 +1,7 @@
 //! AppKit user interface.
 
 pub mod delegate;
+pub mod logging;
 pub mod parameters;
 pub mod radial_panel;
 pub mod radial_view;

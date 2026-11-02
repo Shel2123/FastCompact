@@ -1,6 +1,6 @@
-//! Stand-ins for the ports that later stages implement: the menu and the
-//! form (stage 5), the clipboard, Reveal and info (stage 6). They only log
-//! what they would show.
+//! Stand-ins for the views and the shell until stages 5 and 6: the menu and
+//! the form (stage 5), the clipboard, Reveal and info (stage 6). They only
+//! log what they would show.
 
 use std::path::Path;
 
