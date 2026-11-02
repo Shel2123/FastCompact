@@ -12,7 +12,8 @@
 | Маркеры | `crates/orbit-macos/src/platform/event_tap/fence.rs` |
 | Чтение выделения Finder | `crates/orbit-macos/src/platform/finder_target/` |
 | Carbon и пересчёт координат | `crates/orbit-macos/src/platform/hotkey.rs`, `coordinates.rs` |
-| Второй экземпляр, сборка приложения | `crates/orbit-desktop/src/instance.rs`, `main.rs` |
+| Второй экземпляр | `crates/orbit-desktop/src/instance.rs` |
+| Сборка приложения | `crates/orbit-macos/src/mac_platform.rs`, `crates/orbit-desktop/src/main.rs` (после шага 4.5, см. `docs/stage-4.5.md`) |
 
 ## Запуск
 
