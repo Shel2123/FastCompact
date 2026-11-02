@@ -186,3 +186,5 @@ cython_debug/
 
 # macOS Finder metadata
 .DS_Store
+skills-lock.json
+CLAUDE.md

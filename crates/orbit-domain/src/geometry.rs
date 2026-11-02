@@ -247,6 +247,7 @@ impl MenuGeometry {
     /// from a screen edge and `invoke` lies over a slot (I3). After that the
     /// position relative to `center` decides. The result depends only on the
     /// current points, so the highlight and the final choice always agree.
+    #[must_use]
     pub fn hit(&self, center: ScreenPoint, invoke: ScreenPoint, cursor: ScreenPoint) -> Hit {
         if !(center.is_finite() && invoke.is_finite() && cursor.is_finite()) {
             return Hit::Outside;

@@ -14,12 +14,22 @@ unsafe extern "C" {
     fn IsSecureEventInputEnabled() -> u8;
 }
 
-/// Whether Orbit has Accessibility access. With `prompt`, the system asks
-/// the user to grant it if it is missing.
+/// Whether [`accessibility_trusted`] may show the system permission dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionPrompt {
+    /// Only report the current state.
+    Silent,
+    /// Ask the user to grant access if it is missing.
+    Ask,
+}
+
+/// Whether Orbit has Accessibility access. With [`PermissionPrompt::Ask`],
+/// the system asks the user to grant it if it is missing.
 ///
 /// Can take tens of milliseconds; keep it off the tap thread.
-pub fn accessibility_trusted(prompt: bool) -> bool {
-    if !prompt {
+#[must_use]
+pub fn accessibility_trusted(prompt: PermissionPrompt) -> bool {
+    if prompt == PermissionPrompt::Silent {
         // SAFETY: takes no arguments and only reads the trust state.
         return unsafe { AXIsProcessTrusted() };
     }
@@ -34,6 +44,7 @@ pub fn accessibility_trusted(prompt: bool) -> bool {
 
 /// Whether secure keyboard entry is on, in any process. The tap then gets
 /// no keyboard events.
+#[must_use]
 pub fn secure_input_enabled() -> bool {
     // SAFETY: takes no arguments and only reads a system flag.
     unsafe { IsSecureEventInputEnabled() != 0 }

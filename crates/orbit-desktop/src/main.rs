@@ -22,7 +22,7 @@ use orbit_macos::platform::event_tap::log::InputLog;
 use orbit_macos::platform::event_tap::tap::{EventTap, TapOptions};
 use orbit_macos::platform::finder_target::FinderSelectionResolver;
 use orbit_macos::platform::hotkey::{HotkeyAdapter, forward_signals};
-use orbit_macos::platform::permissions::accessibility_trusted;
+use orbit_macos::platform::permissions::{PermissionPrompt, accessibility_trusted};
 use orbit_macos::ui::status_item::status_item;
 use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
@@ -62,7 +62,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), Box<dyn Error>> {
     let debug = DebugSettings::from_env();
     // Asks for Accessibility on the first start; the tap waits for it.
     info!(
-        accessibility = accessibility_trusted(true),
+        accessibility = accessibility_trusted(PermissionPrompt::Ask),
         "accessibility checked"
     );
 

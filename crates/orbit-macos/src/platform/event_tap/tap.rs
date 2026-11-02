@@ -43,7 +43,7 @@ use super::tracker::{
     Button, Disposition, GestureTracker, HidKeys, Modifiers, PollState, QuartzPoint, Signal,
     TapEvent, TapIo,
 };
-use crate::platform::permissions::{accessibility_trusted, secure_input_enabled};
+use crate::platform::permissions::{PermissionPrompt, accessibility_trusted, secure_input_enabled};
 
 /// Event types the tap must get for the gesture and the guard.
 const REQUIRED_TYPES: [CGEventType; 14] = [
@@ -253,7 +253,7 @@ impl EventTap {
         TapStatus {
             running: self.shared.running.load(Ordering::Acquire),
             listed: own_tap(),
-            accessibility: accessibility_trusted(false),
+            accessibility: accessibility_trusted(PermissionPrompt::Silent),
             secure_input: secure_input_enabled(),
         }
     }
@@ -269,7 +269,7 @@ impl EventTap {
 fn watch_access(weak: &Weak<Shared>) {
     let mut was_trusted = false;
     while let Some(shared) = weak.upgrade() {
-        let trusted = accessibility_trusted(false);
+        let trusted = accessibility_trusted(PermissionPrompt::Silent);
         shared.trusted.store(trusted, Ordering::Release);
         if trusted && !was_trusted {
             info!("accessibility granted; creating the event tap");
