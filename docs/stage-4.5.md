@@ -17,7 +17,7 @@ orbit-domain → orbit-app → orbit-runtime → orbit-macos → orbit-desktop
 | Resolver-поток, пул задач | `crates/orbit-runtime/src/{resolver,jobs}.rs` |
 | `MacPlatform`, порядок запуска | `crates/orbit-macos/src/mac_platform.rs` |
 | Опции и отладочные переключатели | `crates/orbit-macos/src/debug.rs` (`MacOptions`) |
-| Логирующие заглушки видов и shell (до этапов 5 и 6) | `crates/orbit-macos/src/ui/logging.rs` |
+| Логирующие заглушки видов и shell (меню заменено `RadialMenu` на этапе 5, остальное до этапов 6–8) | `crates/orbit-macos/src/ui/logging.rs` |
 | Заглушка операций (до этапа 7) | `crates/orbit-macos/src/operations/unavailable.rs` |
 | Правило имён файлов | `FileNamePolicy` в `crates/orbit-domain/src/operation.rs` |
 | Проверка переносимости | `scripts/check-portable.sh` |
