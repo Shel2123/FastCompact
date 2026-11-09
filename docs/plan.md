@@ -94,7 +94,7 @@ orbit-domain → orbit-app → orbit-runtime → orbit-macos → orbit-desktop
 | 3 | Runtime-скелет и порты | ✅ `189d3b6`; [`plans/stage-3-runtime-skeleton.md`](plans/stage-3-runtime-skeleton.md) |
 | 4 | Хоткей → `FinderSelectionResolver` без UI | ✅ код; ручная матрица [`stage-4.md`](stage-4.md): S5b, S12c, S14 не прогнаны; [`plans/stage-4-gesture-resolver.md`](plans/stage-4-gesture-resolver.md) |
 | 4.5 | Платформенные порты и `orbit-runtime` | ✅ код, 7 коммитов `12c2011`…`5d404c8`; ручной прогон S1/S2/S4/S5/S6/S8/S12 после переезда не сделан; [`stage-4.5.md`](stage-4.5.md) |
-| 5 | Круговое меню (`ui/radial_panel.rs`, `ui/radial_view.rs`) | в работе: шаг 0 (spike) ✅ в коде, G1–G7 пройдены, G8 закрыт по решению пользователя (светлая тема читается после правки, остальные сочетания не прогнаны), G9 не прогнан, G10 не сделан; [`spike-5.md`](spike-5.md), [`plans/stage-5-step-0-ui-spike.md`](plans/stage-5-step-0-ui-spike.md) |
+| 5 | Круговое меню (`ui/radial_panel.rs`, `ui/radial_view.rs`) | в работе: шаг 0 (spike) ✅ в коде, G1–G7 пройдены, G8 закрыт по решению пользователя (светлая тема читается после правки, остальные сочетания не прогнаны), G9 ✅ (замер агента: CPU около 0,2 %, RSS ≈ 43 МБ в простое, debug), G10 не сделан; [`spike-5.md`](spike-5.md), [`plans/stage-5-step-0-ui-spike.md`](plans/stage-5-step-0-ui-spike.md) |
 | 6 | Мгновенные действия: путь, Reveal, сведения | не начат |
 | 7 | Jobs, `publish_new`, ZIP | не начат |
 | 8 | Изображения (конвертация, resize) и форма параметров | не начат |
@@ -122,7 +122,7 @@ orbit-domain → orbit-app → orbit-runtime → orbit-macos → orbit-desktop
 
 - Ручной прогон после шага 4.5: S1, S2, S4, S5, S6, S8, S12.
 - Ручная матрица этапа 4: S5b, S12c, S14 (нужен второй монитор).
-- Spike UI: G8 закрыт без полного прогона (светлая тема с `glass` читается; не прогнаны `vibrancy`, `plain`, тёмная тема после правки, смена темы без перезапуска, акценты, Reduce Transparency, Reduce Motion; Increase Contrast не учтён в коде), G9 (CPU и RSS в простое), G10 (SwiftUI-эталон для подбора параметров).
+- Spike UI: G8 закрыт без полного прогона (светлая тема с `glass` читается; не прогнаны `vibrancy`, `plain`, тёмная тема после правки, смена темы без перезапуска, акценты, Reduce Transparency, Reduce Motion; Increase Contrast не учтён в коде), G10 (SwiftUI-эталон для подбора параметров).
 - Четыре места с `catch_unwind` без пояснения, почему он там нужен.
 - Всё лежит локально, ничего не запушено; работа идёт в одной ветке `spike/stage-0`.
 
