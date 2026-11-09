@@ -87,6 +87,7 @@ objc2-app-kit = { workspace = true, features = [
     "NSApplication",
     "NSButton",
     "NSColor",
+    "NSColorSpace",
     "NSControl",
     "NSEvent",
     "NSGraphics",
@@ -175,6 +176,8 @@ path = "examples/spike/main.rs"
 [[example]]
 name = "spike_ui"
 path = "examples/spike_ui/main.rs"
+# Runs the contrast tests that live next to the spike code.
+test = true
 
 [[test]]
 name = "main_thread"

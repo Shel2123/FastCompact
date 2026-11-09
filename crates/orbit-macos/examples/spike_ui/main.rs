@@ -127,7 +127,7 @@ impl State {
         let cursor = NSEvent::mouseLocation();
         self.panel.show(self.mtm, cursor);
         let shown = started.elapsed();
-        info!(?shown, "show returned");
+        info!(?shown, dark = self.panel.dark(), "show returned");
         // Next turn of the main run loop: the transaction has been committed.
         DispatchQueue::main().exec_async(move || {
             info!(elapsed = ?started.elapsed(), "next run loop turn after show");

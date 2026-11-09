@@ -4,7 +4,7 @@
 //! [`MenuPanel::new`]. [`MenuPanel::show`] and [`MenuPanel::highlight`] only
 //! move the panel, swap colors of existing layers and add short animations.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::f64::consts::FRAC_PI_2;
 use std::ptr::{self, NonNull};
 
@@ -13,13 +13,15 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, MainThreadMarker};
 use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSGlassEffectView, NSImage, NSPanel, NSPopUpMenuWindowLevel,
-    NSScreen, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
-    NSVisualEffectView, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+    NSApplication, NSBackingStoreType, NSColor, NSColorSpace, NSGlassEffectView, NSImage, NSPanel,
+    NSPopUpMenuWindowLevel, NSScreen, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSWorkspace,
 };
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{CGColor, CGImage, CGMutablePath};
-use objc2_foundation::{NSNumber, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSArray, NSNumber, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::{
     CABasicAnimation, CALayer, CAMediaTiming, CAMediaTimingFunction, CAShapeLayer,
     CASpringAnimation, CATransaction,
@@ -75,7 +77,9 @@ pub struct MenuPanel {
     plain: Retained<CAShapeLayer>,
     container: Retained<CALayer>,
     sectors: Vec<Retained<CAShapeLayer>>,
-    _icons: Vec<Retained<CALayer>>,
+    icons: Vec<Retained<CALayer>>,
+    /// Colors for the current theme; rebuilt on every show.
+    palette: RefCell<Palette>,
     geometry: MenuGeometry,
     config: Config,
     available: Vec<bool>,
@@ -151,10 +155,14 @@ impl MenuPanel {
         container.setPosition(centre);
         container.setContentsScale(scale);
 
+        // Colors follow the theme; `show` rebuilds them on every invocation.
+        let app_dark = is_dark(&NSApplication::sharedApplication(mtm).effectiveAppearance());
+        let palette = Palette::new(app_dark);
+
         // Fallback disc for Reduce Transparency and `plain`.
         let plain = CAShapeLayer::new();
         plain.setPath(Some(&disc_path(outer)));
-        plain.setFillColor(Some(&srgb(0.12, 0.12, 0.14, 0.96)));
+        plain.setFillColor(Some(&palette.disc()));
         plain.setContentsScale(scale);
         plain.setHidden(config.background != Background::Plain);
         container.addSublayer(&plain);
@@ -164,13 +172,13 @@ impl MenuPanel {
             .collect();
         let mut sectors = Vec::with_capacity(geometry.slots());
         let mut icons = Vec::with_capacity(geometry.slots());
-        for (slot, &is_available) in available.iter().enumerate() {
+        for slot in 0..geometry.slots() {
             let sector = CAShapeLayer::new();
             sector.setContentsScale(scale);
             sector.setPath(Some(&sector_path(&geometry, slot)));
             container.addSublayer(&sector);
             sectors.push(sector);
-            let icon = icon_layer(&geometry, slot, is_available, scale);
+            let icon = icon_layer(&geometry, slot, scale);
             container.addSublayer(&icon);
             icons.push(icon);
         }
@@ -186,7 +194,8 @@ impl MenuPanel {
             plain,
             container,
             sectors,
-            _icons: icons,
+            icons,
+            palette: RefCell::new(palette),
             geometry,
             config,
             available,
@@ -219,9 +228,14 @@ impl MenuPanel {
         let reduce_motion = workspace.accessibilityDisplayShouldReduceMotion();
         let reduce_transparency = workspace.accessibilityDisplayShouldReduceTransparency();
 
+        // The theme is read on every show: it may have changed while hidden.
+        let dark = self.surface_is_dark(mtm, reduce_transparency);
+
         CATransaction::begin();
         CATransaction::setDisableActions(true);
         self.selected.set(None);
+        *self.palette.borrow_mut() = Palette::new(dark);
+        self.plain.setFillColor(Some(&self.palette.borrow().disc()));
         self.paint(None);
         if let Some(glass) = &self.glass {
             glass.setHidden(reduce_transparency);
@@ -268,6 +282,11 @@ impl MenuPanel {
         slot
     }
 
+    /// Whether the palette of the last show is the dark one (for the log).
+    pub fn dark(&self) -> bool {
+        self.palette.borrow().dark
+    }
+
     pub fn selected(&self) -> Option<usize> {
         self.selected.get()
     }
@@ -282,9 +301,38 @@ impl MenuPanel {
     }
 
     fn paint(&self, selected: Option<usize>) {
-        for (slot, sector) in self.sectors.iter().enumerate() {
-            let color = sector_color(slot, selected == Some(slot), self.available[slot]);
-            sector.setFillColor(Some(&color));
+        let palette = self.palette.borrow();
+        for (slot, (sector, icon)) in self.sectors.iter().zip(&self.icons).enumerate() {
+            let highlighted = selected == Some(slot);
+            let available = self.available[slot];
+            sector.setFillColor(Some(&palette.sector(slot, highlighted, available)));
+            icon.setBackgroundColor(Some(&palette.icon(slot, highlighted, available)));
+        }
+    }
+
+    /// Whether the surface the menu is drawn on is dark. For glass that is
+    /// the glass view; the HUD material is pinned to the app theme so that it
+    /// and the palette agree; the plain disc and Reduce Transparency follow
+    /// the app.
+    fn surface_is_dark(&self, mtm: MainThreadMarker, reduce_transparency: bool) -> bool {
+        let app_dark = is_dark(&NSApplication::sharedApplication(mtm).effectiveAppearance());
+        match (&self.glass, self.config.background) {
+            (Some(view), Background::Glass) if !reduce_transparency => {
+                is_dark(&view.effectiveAppearance())
+            }
+            (Some(view), Background::Vibrancy) if !reduce_transparency => {
+                // SAFETY: AppKit constants, valid for the program's lifetime.
+                let name = unsafe {
+                    if app_dark {
+                        NSAppearanceNameDarkAqua
+                    } else {
+                        NSAppearanceNameAqua
+                    }
+                };
+                view.setAppearance(NSAppearance::appearanceNamed(name).as_deref());
+                app_dark
+            }
+            _ => app_dark,
         }
     }
 
@@ -430,26 +478,148 @@ fn srgb(r: f64, g: f64, b: f64, a: f64) -> CFRetained<CGColor> {
     CGColor::new_srgb(r, g, b, a)
 }
 
-fn sector_color(slot: usize, highlighted: bool, available: bool) -> CFRetained<CGColor> {
-    let cancel = slot == CANCEL_SLOT;
-    match (highlighted, available) {
-        (true, true) => {
-            let base = if cancel {
-                NSColor::systemRedColor()
-            } else {
-                NSColor::controlAccentColor()
-            };
-            let color = base.colorWithAlphaComponent(0.85).CGColor();
-            // SAFETY: the pointer comes from a live reference and the retain
-            // gives the new owner its own count.
-            unsafe { CFRetained::retain(NonNull::from(&*color)) }
+/// Alpha of the highlight fill.
+const HIGHLIGHT_ALPHA: f64 = 0.85;
+/// Minimum contrast of an icon against its sector (WCAG 1.4.11, graphics).
+const MIN_ICON_CONTRAST: f64 = 3.0;
+
+/// Color of an icon: white or black.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ink {
+    White,
+    Black,
+}
+
+impl Ink {
+    fn color(self, alpha: f64) -> CFRetained<CGColor> {
+        match self {
+            Self::White => srgb(1.0, 1.0, 1.0, alpha),
+            Self::Black => srgb(0.0, 0.0, 0.0, alpha),
         }
-        // The slot is under the cursor but cannot be chosen.
-        (true, false) => srgb(0.5, 0.5, 0.5, 0.25),
-        (false, true) if cancel => srgb(0.55, 0.15, 0.15, 0.30),
-        (false, true) => srgb(1.0, 1.0, 1.0, 0.10),
-        (false, false) => srgb(1.0, 1.0, 1.0, 0.04),
     }
+}
+
+/// Relative luminance of an sRGB color (WCAG 2).
+fn luminance(r: f64, g: f64, b: f64) -> f64 {
+    let linear = |c: f64| {
+        if c <= 0.039_28 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+/// The ink for an icon on a fill: white while it keeps the minimum contrast,
+/// black otherwise. The user picks the accent, so a yellow or orange fill
+/// must not get a white icon. The fill is treated as opaque; its 0.85 alpha
+/// shifts the real color a little, enough to matter only near the threshold.
+fn ink_for_fill(r: f64, g: f64, b: f64) -> Ink {
+    let white_contrast = 1.05 / (luminance(r, g, b) + 0.05);
+    if white_contrast >= MIN_ICON_CONTRAST {
+        Ink::White
+    } else {
+        Ink::Black
+    }
+}
+
+/// A highlight fill and the ink that reads on it.
+struct Highlighted {
+    fill: CFRetained<CGColor>,
+    ink: Ink,
+}
+
+impl Highlighted {
+    fn of(base: &NSColor) -> Self {
+        let color = base.colorWithAlphaComponent(HIGHLIGHT_ALPHA).CGColor();
+        // SAFETY: the pointer comes from a live reference and the retain
+        // gives the new owner its own count.
+        let fill = unsafe { CFRetained::retain(NonNull::from(&*color)) };
+        let ink = match base.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) {
+            Some(rgb) => ink_for_fill(
+                rgb.redComponent(),
+                rgb.greenComponent(),
+                rgb.blueComponent(),
+            ),
+            None => {
+                warn!("highlight color has no sRGB form; white icons on it");
+                Ink::White
+            }
+        };
+        Self { fill, ink }
+    }
+}
+
+/// Colors of the menu for one theme. Dynamic colors (accent, red) are
+/// resolved when the palette is built, which is on every show.
+struct Palette {
+    dark: bool,
+    accent: Highlighted,
+    cancel: Highlighted,
+}
+
+impl Palette {
+    fn new(dark: bool) -> Self {
+        Self {
+            dark,
+            accent: Highlighted::of(&NSColor::controlAccentColor()),
+            cancel: Highlighted::of(&NSColor::systemRedColor()),
+        }
+    }
+
+    /// Fallback disc for Reduce Transparency and `plain`.
+    fn disc(&self) -> CFRetained<CGColor> {
+        if self.dark {
+            srgb(0.12, 0.12, 0.14, 0.96)
+        } else {
+            srgb(0.96, 0.96, 0.97, 0.96)
+        }
+    }
+
+    fn highlight(&self, slot: usize) -> &Highlighted {
+        if slot == CANCEL_SLOT {
+            &self.cancel
+        } else {
+            &self.accent
+        }
+    }
+
+    fn sector(&self, slot: usize, highlighted: bool, available: bool) -> CFRetained<CGColor> {
+        match (highlighted, available) {
+            (true, true) => self.highlight(slot).fill.clone(),
+            // The slot is under the cursor but cannot be chosen.
+            (true, false) => srgb(0.5, 0.5, 0.5, 0.25),
+            (false, true) if slot == CANCEL_SLOT => srgb(0.55, 0.15, 0.15, 0.30),
+            (false, true) if self.dark => srgb(1.0, 1.0, 1.0, 0.10),
+            (false, true) => srgb(0.0, 0.0, 0.0, 0.08),
+            (false, false) if self.dark => srgb(1.0, 1.0, 1.0, 0.04),
+            (false, false) => srgb(0.0, 0.0, 0.0, 0.03),
+        }
+    }
+
+    fn icon(&self, slot: usize, highlighted: bool, available: bool) -> CFRetained<CGColor> {
+        if highlighted && available {
+            return self.highlight(slot).ink.color(0.95);
+        }
+        match (self.dark, available) {
+            (true, true) => Ink::White.color(0.95),
+            (true, false) => Ink::White.color(0.30),
+            (false, true) => Ink::Black.color(0.80),
+            (false, false) => Ink::Black.color(0.30),
+        }
+    }
+}
+
+/// Whether an appearance is the dark one. Unknown counts as dark, which is
+/// what the menu looked like before it followed the theme.
+fn is_dark(appearance: &NSAppearance) -> bool {
+    // SAFETY: AppKit constants, valid for the program's lifetime.
+    let (aqua, dark_aqua) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
+    let names = NSArray::from_slice(&[aqua, dark_aqua]);
+    appearance
+        .bestMatchFromAppearancesWithNames(&names)
+        .is_none_or(|name| name.isEqualToString(dark_aqua))
 }
 
 /// SF Symbol of an item.
@@ -467,13 +637,9 @@ fn symbol_name(item: MenuItem) -> &'static str {
     }
 }
 
-/// An icon: a white layer masked by the symbol, so the symbol takes any color.
-fn icon_layer(
-    geometry: &MenuGeometry,
-    slot: usize,
-    available: bool,
-    scale: f64,
-) -> Retained<CALayer> {
+/// An icon: a layer masked by the symbol, so the symbol takes any color. The
+/// color is set by `MenuPanel::paint`.
+fn icon_layer(geometry: &MenuGeometry, slot: usize, scale: f64) -> Retained<CALayer> {
     let angle = geometry.slot_center(slot);
     let radius = f64::midpoint(geometry.neutral_radius(), geometry.outer_radius());
     let c = SIZE / 2.0;
@@ -484,12 +650,6 @@ fn icon_layer(
         c + radius * angle.sin(),
         c + radius * angle.cos(),
     ));
-    layer.setBackgroundColor(Some(&srgb(
-        1.0,
-        1.0,
-        1.0,
-        if available { 0.95 } else { 0.30 },
-    )));
 
     let name = symbol_name(MENU_LAYOUT[slot]);
     match symbol_image(name, scale) {
@@ -554,5 +714,32 @@ fn dump_layer(layer: &CALayer, depth: usize) {
         for child in children.iter() {
             dump_layer(&child, depth + 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ink, ink_for_fill, luminance};
+
+    #[test]
+    fn light_accents_get_black_icons() {
+        // systemYellow and systemOrange: white would fall under 3:1.
+        assert_eq!(ink_for_fill(1.0, 0.8, 0.0), Ink::Black);
+        assert_eq!(ink_for_fill(1.0, 0.584, 0.0), Ink::Black);
+        assert_eq!(ink_for_fill(1.0, 1.0, 1.0), Ink::Black);
+    }
+
+    #[test]
+    fn dark_accents_keep_white_icons() {
+        // systemBlue, pure red and black.
+        assert_eq!(ink_for_fill(0.0, 0.478, 1.0), Ink::White);
+        assert_eq!(ink_for_fill(1.0, 0.0, 0.0), Ink::White);
+        assert_eq!(ink_for_fill(0.0, 0.0, 0.0), Ink::White);
+    }
+
+    #[test]
+    fn luminance_runs_from_black_to_white() {
+        assert!(luminance(0.0, 0.0, 0.0).abs() < 1e-12);
+        assert!((luminance(1.0, 1.0, 1.0) - 1.0).abs() < 1e-9);
     }
 }
