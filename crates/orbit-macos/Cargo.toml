@@ -90,6 +90,7 @@ objc2-quartz-core = { workspace = true, features = [
     "objc2-core-graphics",
     "CAAnimation",
     "CALayer",
+    "CAMediaTiming",
     "CAShapeLayer",
     "CATransaction",
 ] }
