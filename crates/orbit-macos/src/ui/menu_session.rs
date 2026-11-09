@@ -76,7 +76,8 @@ impl Session {
     }
 
     /// Whether a menu is open.
-    pub const fn is_open(&self) -> bool {
+    #[cfg(test)]
+    const fn is_open(&self) -> bool {
         self.open
     }
 }

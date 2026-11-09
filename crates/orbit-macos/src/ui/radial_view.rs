@@ -134,7 +134,6 @@ impl SymbolCache {
 
 /// The layers of the menu.
 pub struct Surface {
-    geometry: MenuGeometry,
     scale: f64,
     palette: Palette,
     available: [bool; SLOT_COUNT],
@@ -182,7 +181,6 @@ impl Surface {
             icons.push(icon);
         }
         let mut surface = Self {
-            geometry: *geometry,
             scale,
             palette,
             available: [true; SLOT_COUNT],
@@ -194,11 +192,6 @@ impl Surface {
         };
         surface.apply_symbols();
         Some(surface)
-    }
-
-    /// The geometry the layers were built for.
-    pub const fn geometry(&self) -> &MenuGeometry {
-        &self.geometry
     }
 
     /// The layer to host; its bounds are the disc and its center is the

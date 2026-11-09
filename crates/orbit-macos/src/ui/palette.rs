@@ -129,11 +129,6 @@ impl Palette {
         }
     }
 
-    /// The theme the palette was made for.
-    pub const fn theme(&self) -> Theme {
-        self.theme
-    }
-
     /// Opaque disc under the sectors, for Reduce Transparency and the plain
     /// background.
     pub const fn disc(&self) -> Rgba {

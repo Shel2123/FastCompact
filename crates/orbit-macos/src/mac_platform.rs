@@ -6,11 +6,11 @@ use std::thread;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use orbit_app::messages::AppEvent;
-use orbit_app::ports::{EventSink, OperationExecutor};
+use orbit_app::ports::{EventSink, MenuView, OperationExecutor};
 use orbit_domain::operation::FileNamePolicy;
 use orbit_runtime::{Handler, Platform, PlatformError, ResolverFactory, Views};
 use thiserror::Error;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::debug::{self, MacOptions};
 use crate::main_thread::{MainThreadError, MainThreadSender};
@@ -21,6 +21,7 @@ use crate::platform::finder_target::FinderSelectionResolver;
 use crate::platform::hotkey::{HotkeyAdapter, HotkeyError, forward_signals};
 use crate::platform::permissions::{PermissionPrompt, accessibility_trusted};
 use crate::ui::logging::{LoggingFeedback, LoggingMenuView, LoggingParametersView, LoggingShell};
+use crate::ui::radial_panel::RadialMenu;
 use crate::ui::status_item::status_item;
 
 /// Why the platform could not be created or started.
@@ -108,8 +109,21 @@ impl Platform for MacPlatform {
     }
 
     fn views(&mut self) -> Views {
+        let menu: Box<dyn MenuView> = match RadialMenu::new(
+            self.mtm,
+            self.options.menu_background,
+            self.options.menu_shift,
+        ) {
+            Ok(menu) => Box::new(menu),
+            Err(err) => {
+                // The gesture still works, but nothing is drawn: the user
+                // would release the key without seeing the menu.
+                error!(%err, "the radial menu cannot be built; the menu is only logged");
+                Box::new(LoggingMenuView)
+            }
+        };
         Views {
-            menu: Box::new(LoggingMenuView),
+            menu,
             parameters: Box::new(LoggingParametersView),
             feedback: Box::new(LoggingFeedback),
             shell: Box::new(LoggingShell),
