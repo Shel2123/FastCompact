@@ -17,11 +17,20 @@ objc2-app-kit = { workspace = true, features = [
     "std",
     "libc",
     "objc2-core-foundation",
+    "objc2-core-graphics",
+    "NSAppearance",
     "NSApplication",
     "NSButton",
+    "NSColor",
+    "NSColorSpace",
     "NSControl",
+    "NSGlassEffectView",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
     "NSMenu",
     "NSMenuItem",
+    "NSPanel",
     "NSResponder",
     "NSRunningApplication",
     "NSScreen",
@@ -29,6 +38,8 @@ objc2-app-kit = { workspace = true, features = [
     "NSStatusBarButton",
     "NSStatusItem",
     "NSView",
+    "NSVisualEffectView",
+    "NSWindow",
     "NSWorkspace",
 ] }
 objc2-application-services = { workspace = true, features = [
@@ -52,10 +63,14 @@ objc2-core-foundation = { workspace = true, features = [
 objc2-core-graphics = { workspace = true, features = [
     "std",
     "libc",
+    "CGAffineTransform",
+    "CGColor",
     "CGError",
     "CGEvent",
     "CGEventSource",
     "CGEventTypes",
+    "CGImage",
+    "CGPath",
     "CGRemoteOperation",
 ] }
 objc2-foundation = { workspace = true, features = [
@@ -67,6 +82,16 @@ objc2-foundation = { workspace = true, features = [
     "NSString",
     "NSURL",
     "NSValue",
+] }
+objc2-quartz-core = { workspace = true, features = [
+    "std",
+    "bitflags",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "CAAnimation",
+    "CALayer",
+    "CAShapeLayer",
+    "CATransaction",
 ] }
 thiserror.workspace = true
 tracing.workspace = true
