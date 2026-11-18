@@ -37,7 +37,8 @@ use super::radial_view::{MARGIN, Surface, disc_side, drawable, place_disc, windo
 /// How long a highlight takes to change, in seconds.
 const HIGHLIGHT_SECONDS: f64 = 0.07;
 /// A window that landed closer than this to where it was put is taken to be
-/// there, in points: the readback is not exact below a pixel.
+/// there, in points. The window is asked for whole points and gets them, so
+/// any real move is a whole point; this only absorbs readback noise.
 const SHIFT_TOLERANCE: f64 = 0.5;
 
 /// What is behind the sectors.
@@ -257,21 +258,28 @@ impl RadialMenu {
 
         let panel = &mut self.panel;
         let side = window_side(&model.geometry);
-        let requested = NSPoint::new(model.center.x - side / 2.0, model.center.y - side / 2.0);
+        let disc = disc_side(&model.geometry);
+        let exact = (model.center.x - side / 2.0, model.center.y - side / 2.0);
+        // AppKit keeps a window on whole points and drops the fraction of the
+        // pointer, not always to the nearest point. The window is asked for
+        // whole points, so that it lands where asked, and the disc takes the
+        // fraction inside it.
+        let asked = (exact.0.round(), exact.1.round());
         let (dx, dy) = self.debug_shift;
         panel.window.setFrameOrigin(NSPoint::new(
-            requested.x + f64::from(dx),
-            requested.y + f64::from(dy),
+            asked.0 + f64::from(dx),
+            asked.1 + f64::from(dy),
         ));
         // Where AppKit put the window is what counts: the disc must sit at
         // the center of the model, not at the center of the window.
         let actual = panel.window.frame().origin;
-        let shift = (snap(requested.x - actual.x), snap(requested.y - actual.y));
-        let placement = place_disc(side, disc_side(&model.geometry), shift);
+        let offset = (exact.0 - actual.x, exact.1 - actual.y);
+        let scale = panel.window.backingScaleFactor();
+        let placement = place_disc(side, disc, offset, scale);
+        let shift = (snap(asked.0 - actual.x), snap(asked.1 - actual.y));
         if shift != (0.0, 0.0) {
             warn!(?shift, ?placement, "the window is not where it was put");
         }
-        let scale = panel.window.backingScaleFactor();
 
         CATransaction::begin();
         CATransaction::setDisableActions(true);
@@ -289,11 +297,16 @@ impl RadialMenu {
                 scale,
                 shown_scale, "the display scale differs after the show"
             );
+            // The pixel grid changed with the display.
+            let placement = place_disc(side, disc, offset, shown_scale);
             CATransaction::begin();
             CATransaction::setDisableActions(true);
             panel
                 .surface
                 .reset(palette, available, shown_scale, opaque_disc);
+            panel
+                .disc
+                .setFrameOrigin(NSPoint::new(placement.origin.0, placement.origin.1));
             CATransaction::commit();
         }
         if cfg!(debug_assertions) {

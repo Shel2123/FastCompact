@@ -69,15 +69,30 @@ pub struct DiscPlacement {
 
 /// Where to put the disc so that its center stays where the model asked.
 ///
-/// `shift` is the requested origin of the window minus the origin it got
+/// `shift` is the origin the window should have minus the origin it got
 /// (both Cocoa screen coordinates, y up): the window sits `shift` away from
 /// where it should, so the disc moves by `shift` the other way inside it. The
+/// shift is usually a fraction of a point (a window keeps to whole points,
+/// the pointer does not), and the disc goes to the nearest device pixel
+/// (`scale` pixels per point), so that it is not drawn between pixels. The
 /// disc stays inside the window, otherwise its edge would be cut off.
-pub fn place_disc(window_side: f64, disc_side: f64, shift: (f64, f64)) -> DiscPlacement {
+pub fn place_disc(
+    window_side: f64,
+    disc_side: f64,
+    shift: (f64, f64),
+    scale: f64,
+) -> DiscPlacement {
     let nominal = (window_side - disc_side) / 2.0;
     let furthest = window_side - disc_side;
+    let to_pixel = |points: f64| {
+        if scale > 0.0 {
+            (points * scale).round() / scale
+        } else {
+            points
+        }
+    };
     let axis = |shift: f64| {
-        let wanted = nominal + shift;
+        let wanted = to_pixel(nominal + shift);
         let origin = wanted.clamp(0.0, furthest);
         (origin, wanted - origin)
     };
@@ -454,7 +469,7 @@ mod tests {
 
     #[test]
     fn disc_sits_in_the_middle_of_the_window_without_a_shift() {
-        let placement = place_disc(240.0, 220.0, (0.0, 0.0));
+        let placement = place_disc(240.0, 220.0, (0.0, 0.0), 2.0);
         assert_eq!(placement.origin, (MARGIN, MARGIN));
         assert_eq!(placement.residual, (0.0, 0.0));
     }
@@ -463,12 +478,12 @@ mod tests {
     fn disc_follows_a_shift_on_each_axis() {
         // The window sits 6 left and 4 above where it should: the disc moves
         // 6 right and 4 down inside it.
-        let both = place_disc(240.0, 220.0, (6.0, -4.0));
+        let both = place_disc(240.0, 220.0, (6.0, -4.0), 2.0);
         assert_eq!(both.origin, (16.0, 6.0));
         assert_eq!(both.residual, (0.0, 0.0));
-        let only_x = place_disc(240.0, 220.0, (-8.0, 0.0));
+        let only_x = place_disc(240.0, 220.0, (-8.0, 0.0), 2.0);
         assert_eq!(only_x.origin, (2.0, 10.0));
-        let only_y = place_disc(240.0, 220.0, (0.0, 8.0));
+        let only_y = place_disc(240.0, 220.0, (0.0, 8.0), 2.0);
         assert_eq!(only_y.origin, (10.0, 18.0));
         // The disc stays inside the window.
         for placement in [both, only_x, only_y] {
@@ -478,8 +493,25 @@ mod tests {
     }
 
     #[test]
+    fn a_fraction_of_a_point_goes_to_the_nearest_pixel() {
+        // The pointer at x.8164, y.2734: the window took the whole points,
+        // the disc takes the rest, to half a point on a Retina display and to
+        // a whole point on a plain one.
+        let retina = place_disc(240.0, 220.0, (0.8164, 0.2734), 2.0);
+        assert_eq!(retina.origin, (11.0, 10.5));
+        assert_eq!(retina.residual, (0.0, 0.0));
+        let plain = place_disc(240.0, 220.0, (0.8164, 0.2734), 1.0);
+        assert_eq!(plain.origin, (11.0, 10.0));
+        let negative = place_disc(240.0, 220.0, (-0.3, -0.7), 2.0);
+        assert_eq!(negative.origin, (9.5, 9.5));
+        // No scale known: the fraction is kept as it is.
+        let unknown = place_disc(240.0, 220.0, (0.25, 0.0), 0.0);
+        assert_eq!(unknown.origin, (10.25, 10.0));
+    }
+
+    #[test]
     fn disc_does_not_leave_the_window_and_reports_what_is_left() {
-        let placement = place_disc(240.0, 220.0, (14.0, -13.0));
+        let placement = place_disc(240.0, 220.0, (14.0, -13.0), 2.0);
         // The window has 20 points to give: 10 each way from the middle.
         assert_eq!(placement.origin, (20.0, 0.0));
         assert_eq!(placement.residual, (4.0, -3.0));
