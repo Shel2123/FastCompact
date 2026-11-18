@@ -95,7 +95,7 @@ orbit-domain → orbit-app → orbit-runtime → orbit-macos → orbit-desktop
 | 3 | Runtime-скелет и порты | ✅ `189d3b6`; [`plans/stage-3-runtime-skeleton.md`](plans/stage-3-runtime-skeleton.md) |
 | 4 | Хоткей → `FinderSelectionResolver` без UI | ✅ код; ручная матрица [`stage-4.md`](stage-4.md): S5b, S12c, S14 не прогнаны; [`plans/stage-4-gesture-resolver.md`](plans/stage-4-gesture-resolver.md) |
 | 4.5 | Платформенные порты и `orbit-runtime` | ✅ код, 7 коммитов `12c2011`…`5d404c8`; ручной прогон S1/S2/S4/S5/S6/S8/S12 после переезда не сделан; [`stage-4.5.md`](stage-4.5.md) |
-| 5 | Круговое меню (`ui/radial_panel.rs`, `ui/radial_view.rs`) | ✅ код (4 коммита после шага 0), меню рисует `RadialMenu`; ручная матрица U1–U10 не прогнана; **не сделано: имя файла в меню** (решение пользователя), Increase Contrast; шаг 0 (spike) закрыт, см. [`spike-5.md`](spike-5.md); [`stage-5.md`](stage-5.md), [`plans/stage-5-step-0-ui-spike.md`](plans/stage-5-step-0-ui-spike.md) |
+| 5 | Круговое меню (`ui/radial_panel.rs`, `ui/radial_view.rs`) | ✅ код (4 коммита после шага 0), меню рисует `RadialMenu`; ручная матрица: прошли U1–U4, U6, U9, не прогнаны U4b, U5, U7, U8, U10; **не сделано: имя файла в меню** (решение пользователя), Increase Contrast; шаг 0 (spike) закрыт, см. [`spike-5.md`](spike-5.md); [`stage-5.md`](stage-5.md), [`plans/stage-5-step-0-ui-spike.md`](plans/stage-5-step-0-ui-spike.md) |
 | 6 | Мгновенные действия: путь, Reveal, сведения | не начат |
 | 7 | Jobs, `publish_new`, ZIP | не начат |
 | 8 | Изображения (конвертация, resize) и форма параметров | не начат |
@@ -124,7 +124,7 @@ orbit-domain → orbit-app → orbit-runtime → orbit-macos → orbit-desktop
 - Ручной прогон после шага 4.5: S1, S2, S4, S5, S6, S8, S12 (теперь меню видно, удобно вместе с U1–U9).
 - Ручная матрица этапа 4: S5b, S12c, S14 (нужен второй монитор).
 - Spike UI: G8 закрыт без полного прогона (светлая тема с `glass` читается; не прогнаны `vibrancy`, `plain`, тёмная тема после правки, смена темы без перезапуска, акценты, Reduce Transparency, Reduce Motion; Increase Contrast не учтён в коде), G10: данные сняты агентом (`scripts/swiftui-ref/`), за пользователем остались Esc поверх другого приложения, клик вне и сравнение глазами рядом с Rust spike.
-- Этап 5: ручная матрица U1–U10 ([`stage-5.md`](stage-5.md)); имя файла в меню (пункт MVP, не сделан); Increase Contrast; пересчёт темы под открытым меню; проверка на двух дисплеях с разным масштабом.
+- Этап 5: ручная матрица U4b, U5, U7, U8, U10 ([`stage-5.md`](stage-5.md)); имя файла в меню (пункт MVP, не сделан); Increase Contrast; пересчёт темы под открытым меню; проверка на двух дисплеях с разным масштабом.
 - Четыре места с `catch_unwind` без пояснения, почему он там нужен.
 - Всё лежит локально, ничего не запушено; работа идёт в одной ветке `spike/stage-0`.
 
