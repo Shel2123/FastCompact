@@ -1,12 +1,10 @@
 //! Stand-ins that only log what they would show: the menu when the radial
-//! menu cannot be built (a degraded mode), the form until stages 8 and 9,
-//! and the shell until step 4 of stage 6.
-
-use std::path::Path;
+//! menu cannot be built (a degraded mode) and the form until stages 8
+//! and 9.
 
 use orbit_app::catalog::MenuModel;
 use orbit_app::messages::{GestureId, ParameterError, ParametersModel};
-use orbit_app::ports::{MenuView, ParametersView, Shell, ShellError};
+use orbit_app::ports::{MenuView, ParametersView};
 use orbit_app::state::Highlight;
 use tracing::info;
 
@@ -43,21 +41,5 @@ impl ParametersView for LoggingParametersView {
 
     fn hide(&mut self) {
         info!("hide parameters");
-    }
-}
-
-/// Logs the clipboard and Reveal.
-#[derive(Debug, Default)]
-pub struct LoggingShell;
-
-impl Shell for LoggingShell {
-    fn write_clipboard(&mut self, path: &Path) -> Result<(), ShellError> {
-        info!(path = %path.display(), "write clipboard");
-        Ok(())
-    }
-
-    fn reveal(&mut self, path: &Path) -> Result<(), ShellError> {
-        info!(path = %path.display(), "reveal file");
-        Ok(())
     }
 }

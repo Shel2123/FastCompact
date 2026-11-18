@@ -13,7 +13,7 @@ orbit-runtime.workspace = true
 dispatch2.workspace = true
 global-hotkey.workspace = true
 block2.workspace = true
-objc2.workspace = true
+objc2 = { workspace = true, features = ["exception"] }
 objc2-app-kit = { workspace = true, features = [
     "std",
     "block2",
@@ -41,6 +41,7 @@ objc2-app-kit = { workspace = true, features = [
     "NSMenuItem",
     "NSPanel",
     "NSParagraphStyle",
+    "NSPasteboard",
     "NSResponder",
     "NSRunningApplication",
     "NSScreen",
