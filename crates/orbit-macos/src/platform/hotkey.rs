@@ -52,7 +52,7 @@ pub fn forward_signals(sink: Arc<dyn EventSink>) -> impl Fn(Signal) + Send + Syn
                 warn!("no displays; tap points stay unconverted");
                 Displays {
                     primary_height: 0.0,
-                    visible: Vec::new(),
+                    screens: Vec::new(),
                 }
             });
             sink.send(to_event(signal, &displays));
@@ -65,7 +65,7 @@ fn to_event(signal: Signal, displays: &Displays) -> AppEvent {
         Signal::Invoke { gesture, point } => AppEvent::Invoked {
             gesture,
             point: displays.to_cocoa(point),
-            screens: displays.visible.clone(),
+            screens: displays.visible(),
         },
         Signal::Move { gesture, point } => AppEvent::PointerMoved {
             gesture,
@@ -136,6 +136,7 @@ mod tests {
     use orbit_domain::geometry::{ScreenPoint, ScreenRect};
 
     use super::*;
+    use crate::platform::coordinates::Display;
     use crate::platform::event_tap::tap::{ListedTap, REQUIRED_MASK};
     use crate::platform::event_tap::tracker::QuartzPoint;
 
@@ -206,7 +207,10 @@ mod tests {
     fn signals_become_events_in_cocoa_coordinates() {
         let displays = Displays {
             primary_height: 900.0,
-            visible: vec![ScreenRect::new(0.0, 0.0, 1440.0, 875.0)],
+            screens: vec![Display {
+                frame: ScreenRect::new(0.0, 0.0, 1440.0, 900.0),
+                visible: ScreenRect::new(0.0, 0.0, 1440.0, 875.0),
+            }],
         };
         let gesture = GestureId(7);
         let at = QuartzPoint::new(700.0, 500.0);
@@ -216,7 +220,7 @@ mod tests {
             AppEvent::Invoked {
                 gesture,
                 point,
-                screens: displays.visible.clone(),
+                screens: displays.visible(),
             }
         );
         assert_eq!(

@@ -9,7 +9,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime};
 use tracing::{info, warn};
 
-use crate::ui::radial_panel::Background;
+use crate::ui::backdrop::Background;
 
 /// When the secure input pulse starts and ends, after the press.
 const PULSE_ON: Duration = Duration::from_millis(200);

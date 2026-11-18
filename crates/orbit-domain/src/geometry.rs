@@ -92,14 +92,16 @@ impl ScreenRect {
         self.origin.y + self.height
     }
 
-    /// Half-open, so a point on the edge between two adjacent displays
-    /// belongs to exactly one of them.
-    fn contains(&self, point: ScreenPoint) -> bool {
+    /// Whether `point` is inside. Half-open, so a point on the edge between
+    /// two adjacent displays belongs to exactly one of them.
+    pub fn contains(&self, point: ScreenPoint) -> bool {
         (self.origin.x..self.max_x()).contains(&point.x)
             && (self.origin.y..self.max_y()).contains(&point.y)
     }
 
-    fn distance_to(&self, point: ScreenPoint) -> f64 {
+    /// Distance from `point` to the nearest point of the rectangle; zero
+    /// inside.
+    pub fn distance_to(&self, point: ScreenPoint) -> f64 {
         let dx = (self.origin.x - point.x)
             .max(point.x - self.max_x())
             .max(0.0);

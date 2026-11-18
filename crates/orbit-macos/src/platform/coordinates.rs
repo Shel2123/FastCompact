@@ -9,18 +9,28 @@
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSScreen;
+use objc2_foundation::NSRect;
 use orbit_domain::geometry::{ScreenPoint, ScreenRect};
 
 use super::event_tap::tracker::QuartzPoint;
 
-/// The displays as the controller needs them.
+/// The displays as the controller and the panels need them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Displays {
     /// Height of the primary display, which ties the two coordinate systems.
     pub primary_height: f64,
-    /// Visible frames of all displays, without menu bar and Dock, for
-    /// placing the menu.
-    pub visible: Vec<ScreenRect>,
+    /// All displays, the primary first.
+    pub screens: Vec<Display>,
+}
+
+/// One display in Cocoa coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Display {
+    /// The whole display. Tells which display a point is on: the menu bar and
+    /// the Dock are outside `visible` but still on the display.
+    pub frame: ScreenRect,
+    /// The display without the menu bar and the Dock; where windows go.
+    pub visible: ScreenRect,
 }
 
 impl Displays {
@@ -28,28 +38,37 @@ impl Displays {
     pub fn current(mtm: MainThreadMarker) -> Option<Self> {
         let screens = NSScreen::screens(mtm);
         let primary = screens.iter().next()?.frame();
-        let visible = screens
+        let screens = screens
             .iter()
-            .map(|screen| {
-                let frame = screen.visibleFrame();
-                ScreenRect::new(
-                    frame.origin.x,
-                    frame.origin.y,
-                    frame.size.width,
-                    frame.size.height,
-                )
+            .map(|screen| Display {
+                frame: rect(screen.frame()),
+                visible: rect(screen.visibleFrame()),
             })
             .collect();
         Some(Self {
             primary_height: primary.size.height,
-            visible,
+            screens,
         })
+    }
+
+    /// Visible frames of all displays, for placing the menu.
+    pub fn visible(&self) -> Vec<ScreenRect> {
+        self.screens.iter().map(|screen| screen.visible).collect()
     }
 
     /// `point` in Cocoa coordinates.
     pub fn to_cocoa(&self, point: QuartzPoint) -> ScreenPoint {
         ScreenPoint::new(point.x, self.primary_height - point.y)
     }
+}
+
+fn rect(frame: NSRect) -> ScreenRect {
+    ScreenRect::new(
+        frame.origin.x,
+        frame.origin.y,
+        frame.size.width,
+        frame.size.height,
+    )
 }
 
 #[cfg(test)]
@@ -64,13 +83,22 @@ mod tests {
     fn displays() -> Displays {
         Displays {
             primary_height: 900.0,
-            visible: vec![
+            screens: vec![
                 // Primary, with the menu bar.
-                ScreenRect::new(0.0, 0.0, 1440.0, 875.0),
+                Display {
+                    frame: ScreenRect::new(0.0, 0.0, 1440.0, 900.0),
+                    visible: ScreenRect::new(0.0, 0.0, 1440.0, 875.0),
+                },
                 // Above the primary.
-                ScreenRect::new(-200.0, 900.0, 1920.0, 1080.0),
+                Display {
+                    frame: ScreenRect::new(-200.0, 900.0, 1920.0, 1080.0),
+                    visible: ScreenRect::new(-200.0, 900.0, 1920.0, 1080.0),
+                },
                 // Left of the primary, lower.
-                ScreenRect::new(-1280.0, -300.0, 1280.0, 1024.0),
+                Display {
+                    frame: ScreenRect::new(-1280.0, -300.0, 1280.0, 1024.0),
+                    visible: ScreenRect::new(-1280.0, -300.0, 1280.0, 1024.0),
+                },
             ],
         }
     }
@@ -98,11 +126,11 @@ mod tests {
         // Above the primary: negative Quartz y.
         let above = d.to_cocoa(QuartzPoint::new(100.0, -500.0));
         assert_eq!(above, ScreenPoint::new(100.0, 1400.0));
-        assert!(inside(d.visible[1], above));
+        assert!(inside(d.screens[1].visible, above));
         // Left of the primary and lower: negative x, Quartz y past its
         // bottom.
         let left = d.to_cocoa(QuartzPoint::new(-640.0, 1000.0));
         assert_eq!(left, ScreenPoint::new(-640.0, -100.0));
-        assert!(inside(d.visible[2], left));
+        assert!(inside(d.screens[2].visible, left));
     }
 }

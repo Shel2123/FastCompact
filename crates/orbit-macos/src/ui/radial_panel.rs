@@ -12,24 +12,21 @@
 use std::time::Instant;
 
 use objc2::rc::Retained;
-use objc2::runtime::AnyClass;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSApplication, NSBackingStoreType, NSColor, NSColorSpace, NSGlassEffectView, NSPanel,
-    NSPopUpMenuWindowLevel, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindowCollectionBehavior, NSWindowStyleMask,
-    NSWorkspace,
+    NSBackingStoreType, NSColor, NSColorSpace, NSPanel, NSPopUpMenuWindowLevel, NSView,
+    NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
-use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize};
-use objc2_quartz_core::{CALayer, CATransaction};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2_quartz_core::CATransaction;
 use orbit_app::catalog::{MenuModel, SLOT_COUNT};
 use orbit_app::ports::MenuView;
 use orbit_app::state::Highlight;
 use orbit_domain::geometry::MenuGeometry;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
+use super::backdrop::{Backdrop, Background, app_theme, surface_theme};
 use super::menu_session::{HighlightChange, Session};
 use super::palette::{Palette, Rgba, Theme};
 use super::radial_view::{MARGIN, Surface, disc_side, drawable, place_disc, window_side};
@@ -40,40 +37,6 @@ const HIGHLIGHT_SECONDS: f64 = 0.07;
 /// there, in points. The window is asked for whole points and gets them, so
 /// any real move is a whole point; this only absorbs readback noise.
 const SHIFT_TOLERANCE: f64 = 0.5;
-
-/// What is behind the sectors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Background {
-    /// `NSGlassEffectView`, macOS 26 and later.
-    Glass,
-    /// `NSVisualEffectView` with the HUD material.
-    Vibrancy,
-    /// A plain translucent disc.
-    Plain,
-}
-
-impl Background {
-    /// The background named `name` (`glass`, `vibrancy`, `plain`).
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "glass" => Some(Self::Glass),
-            "vibrancy" => Some(Self::Vibrancy),
-            "plain" => Some(Self::Plain),
-            _ => None,
-        }
-    }
-}
-
-/// The background to use, given the one asked for and whether the system has
-/// `NSGlassEffectView`. The second value is `true` when glass was wanted but
-/// the system lacks it.
-fn resolve_background(requested: Option<Background>, glass_available: bool) -> (Background, bool) {
-    match requested {
-        None | Some(Background::Glass) if glass_available => (Background::Glass, false),
-        None | Some(Background::Glass) => (Background::Vibrancy, true),
-        Some(other) => (other, false),
-    }
-}
 
 /// Why the menu window could not be built.
 #[derive(Debug, Error)]
@@ -136,8 +99,11 @@ impl Panel {
         let scale = window.backingScaleFactor();
         let palette = system_palette(app_theme(mtm));
         let surface = Surface::build(geometry, scale, palette).ok_or(ViewError::NotDrawable)?;
-        let (disc, host) = background_view(mtm, background, geometry);
-        let host = host.ok_or(ViewError::NoLayer)?;
+        let Backdrop {
+            view: disc,
+            content: host,
+        } = background_view(mtm, background, geometry);
+        let host = host.layer().ok_or(ViewError::NoLayer)?;
         host.addSublayer(surface.root());
         content.addSubview(&disc);
         Ok(Self {
@@ -149,51 +115,17 @@ impl Panel {
     }
 }
 
-/// The view that is the disc, and the layer of the view that hosts the
-/// drawing. The drawing lives inside the background view, so that the glass
-/// and the sectors are one thing: for glass it is the `contentView`, the
-/// supported way to put content on top of the glass; its coordinates start at
-/// the corner of the disc.
+/// The background view of the disc and the view that hosts the drawing.
+/// The drawing lives inside the background view, so that the glass and the
+/// sectors are one thing.
 fn background_view(
     mtm: MainThreadMarker,
     background: Background,
     geometry: &MenuGeometry,
-) -> (Retained<NSView>, Option<Retained<CALayer>>) {
+) -> Backdrop {
     let side = disc_side(geometry);
-    let outer = geometry.outer_radius();
     let frame = NSRect::new(NSPoint::new(MARGIN, MARGIN), NSSize::new(side, side));
-    let local = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(side, side));
-    match background {
-        Background::Glass => {
-            let overlay = NSView::initWithFrame(NSView::alloc(mtm), local);
-            overlay.setWantsLayer(true);
-            let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), frame);
-            glass.setCornerRadius(outer);
-            glass.setContentView(Some(&overlay));
-            (Retained::into_super(glass), overlay.layer())
-        }
-        Background::Vibrancy => {
-            let view = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), frame);
-            view.setMaterial(NSVisualEffectMaterial::HUDWindow);
-            view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-            view.setState(NSVisualEffectState::Active);
-            view.setWantsLayer(true);
-            if let Some(layer) = view.layer() {
-                layer.setCornerRadius(outer);
-                layer.setMasksToBounds(true);
-            }
-            let overlay = NSView::initWithFrame(NSView::alloc(mtm), local);
-            overlay.setWantsLayer(true);
-            view.addSubview(&overlay);
-            (Retained::into_super(view), overlay.layer())
-        }
-        Background::Plain => {
-            let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
-            view.setWantsLayer(true);
-            let layer = view.layer();
-            (view, layer)
-        }
-    }
+    Backdrop::new(mtm, background, frame, geometry.outer_radius())
 }
 
 /// The radial menu on screen.
@@ -222,11 +154,7 @@ impl RadialMenu {
         background: Option<Background>,
         debug_shift: (i32, i32),
     ) -> Result<Self, ViewError> {
-        let glass_available = AnyClass::get(c"NSGlassEffectView").is_some();
-        let (background, fell_back) = resolve_background(background, glass_available);
-        if fell_back {
-            info!("NSGlassEffectView is not available; the menu uses the vibrancy material");
-        }
+        let background = Background::available(background);
         let panel = Panel::build(mtm, &MenuGeometry::standard(), background)?;
         Ok(Self {
             mtm,
@@ -376,58 +304,6 @@ fn snap(difference: f64) -> f64 {
     }
 }
 
-/// Whether an appearance is the dark one. An unknown one counts as dark.
-fn is_dark(appearance: &NSAppearance) -> bool {
-    // SAFETY: AppKit constants, valid for the program's lifetime.
-    let (aqua, dark_aqua) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
-    let names = NSArray::from_slice(&[aqua, dark_aqua]);
-    appearance
-        .bestMatchFromAppearancesWithNames(&names)
-        .is_none_or(|name| name.isEqualToString(dark_aqua))
-}
-
-fn theme_of(dark: bool) -> Theme {
-    if dark { Theme::Dark } else { Theme::Light }
-}
-
-fn app_theme(mtm: MainThreadMarker) -> Theme {
-    theme_of(is_dark(
-        &NSApplication::sharedApplication(mtm).effectiveAppearance(),
-    ))
-}
-
-/// The theme of what is under the sectors. For glass that is the glass view;
-/// the HUD material is pinned to the theme of the application so that it and
-/// the palette agree; the plain disc and Reduce Transparency follow the
-/// application.
-fn surface_theme(
-    mtm: MainThreadMarker,
-    background: Background,
-    disc: &NSView,
-    reduce_transparency: bool,
-) -> Theme {
-    let app = app_theme(mtm);
-    if reduce_transparency {
-        return app;
-    }
-    match background {
-        Background::Glass => theme_of(is_dark(&disc.effectiveAppearance())),
-        Background::Vibrancy => {
-            // SAFETY: AppKit constants, valid for the program's lifetime.
-            let name = unsafe {
-                if app == Theme::Dark {
-                    NSAppearanceNameDarkAqua
-                } else {
-                    NSAppearanceNameAqua
-                }
-            };
-            disc.setAppearance(NSAppearance::appearanceNamed(name).as_deref());
-            app
-        }
-        Background::Plain => app,
-    }
-}
-
 /// The palette for `theme` with the accent and the red the user has now.
 /// Dynamic system colors are read here, on every show, so a changed accent
 /// shows at the next menu. They are resolved for the appearance of the
@@ -459,50 +335,6 @@ fn srgb(color: &NSColor) -> Option<Rgba> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn glass_is_used_when_the_system_has_it() {
-        assert_eq!(resolve_background(None, true), (Background::Glass, false));
-        assert_eq!(
-            resolve_background(Some(Background::Glass), true),
-            (Background::Glass, false)
-        );
-    }
-
-    #[test]
-    fn glass_falls_back_to_vibrancy_without_the_class() {
-        assert_eq!(
-            resolve_background(None, false),
-            (Background::Vibrancy, true)
-        );
-        assert_eq!(
-            resolve_background(Some(Background::Glass), false),
-            (Background::Vibrancy, true)
-        );
-    }
-
-    #[test]
-    fn a_background_asked_for_is_kept() {
-        for glass in [true, false] {
-            assert_eq!(
-                resolve_background(Some(Background::Vibrancy), glass),
-                (Background::Vibrancy, false)
-            );
-            assert_eq!(
-                resolve_background(Some(Background::Plain), glass),
-                (Background::Plain, false)
-            );
-        }
-    }
-
-    #[test]
-    fn backgrounds_are_named_for_the_debug_switch() {
-        assert_eq!(Background::parse("glass"), Some(Background::Glass));
-        assert_eq!(Background::parse("vibrancy"), Some(Background::Vibrancy));
-        assert_eq!(Background::parse("plain"), Some(Background::Plain));
-        assert_eq!(Background::parse("Glass"), None);
-        assert_eq!(Background::parse(""), None);
-    }
 
     #[test]
     fn rounding_noise_is_not_a_shift() {
