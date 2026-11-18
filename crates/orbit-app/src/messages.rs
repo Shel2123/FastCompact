@@ -365,6 +365,11 @@ pub enum Notice {
         /// Why it failed.
         error: JobError,
     },
+    /// The path of the target is on the clipboard.
+    ///
+    /// The runtime sends it after the platform wrote the clipboard, not the
+    /// controller: only the platform knows whether the write worked.
+    PathCopied,
     /// The platform could not carry out an instant action. Nothing else
     /// changed; the controller is not told.
     ActionFailed {

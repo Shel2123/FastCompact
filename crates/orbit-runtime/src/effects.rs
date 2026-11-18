@@ -27,6 +27,11 @@ pub struct Services {
 /// through the sink, or to the user through [`Feedback`], never by calling
 /// the controller directly.
 ///
+/// Each effect calls one port method, with two exceptions: a failed shell
+/// action is followed by [`Notice::ActionFailed`], and a written clipboard
+/// by [`Notice::PathCopied`]. A successful Reveal tells nothing: the file
+/// manager shows the result.
+///
 /// [`Feedback`]: orbit_app::ports::Feedback
 pub fn execute(effect: Effect, services: &mut Services) {
     let views = &mut services.views;
@@ -54,11 +59,10 @@ pub fn execute(effect: Effect, services: &mut Services) {
         Effect::JobProgress { job, progress } => views.feedback.job_progress(job, progress),
         Effect::Notify(notice) => views.feedback.notify(&notice),
         Effect::ShowInfo(target) => views.feedback.show_info(&target),
-        Effect::WriteClipboard(path) => {
-            if let Err(err) = views.shell.write_clipboard(&path) {
-                shell_failed(views, ShellAction::CopyPath, &path, err);
-            }
-        }
+        Effect::WriteClipboard(path) => match views.shell.write_clipboard(&path) {
+            Ok(()) => views.feedback.notify(&Notice::PathCopied),
+            Err(err) => shell_failed(views, ShellAction::CopyPath, &path, err),
+        },
         Effect::RevealFile(path) => {
             if let Err(err) = views.shell.reveal(&path) {
                 shell_failed(views, ShellAction::Reveal, &path, err);
@@ -191,10 +195,6 @@ mod tests {
             (Effect::Notify(notice.clone()), Call::Notify(notice)),
             (Effect::ShowInfo(target.clone()), Call::ShowInfo(target)),
             (
-                Effect::WriteClipboard("/tmp/a".into()),
-                Call::WriteClipboard("/tmp/a".into()),
-            ),
-            (
                 Effect::RevealFile("/tmp/a".into()),
                 Call::Reveal("/tmp/a".into()),
             ),
@@ -205,8 +205,25 @@ mod tests {
         }
     }
 
-    /// A failed shell action is the one case of two calls: the shell, then
-    /// the user is told. No event reaches the controller.
+    /// A written clipboard is told to the user; a Reveal is not, the file
+    /// manager shows it.
+    #[test]
+    fn copied_path_is_shown_to_the_user() {
+        assert_eq!(
+            run(Effect::WriteClipboard("/tmp/a".into()), None),
+            vec![
+                Call::WriteClipboard("/tmp/a".into()),
+                Call::Notify(Notice::PathCopied),
+            ]
+        );
+        assert_eq!(
+            run(Effect::RevealFile("/tmp/a".into()), None),
+            vec![Call::Reveal("/tmp/a".into())]
+        );
+    }
+
+    /// A failed shell action is shown to the user, and a failed copy does
+    /// not claim the path was copied. No event reaches the controller.
     #[test]
     fn failed_shell_action_is_shown_to_the_user() {
         let cases = [
