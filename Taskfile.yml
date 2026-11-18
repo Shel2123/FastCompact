@@ -1,0 +1,112 @@
+# Frequent commands for Orbit. Run `task` to list them.
+#
+# Signing: put ORBIT_SIGN_IDENTITY="Apple Development: …" into `.env`
+# (gitignored) or export it. With the ad-hoc default, Accessibility access
+# may reset after every rebuild.
+#
+# Debug switches are environment variables and reach the app through the
+# bundle scripts, e.g.:
+#   ORBIT_DEBUG_MAIN_DELAY_MS=300 task run
+#   ORBIT_SPIKE_UI_ANIM=spring task spike:ui
+# Extra script arguments go after `--`:
+#   task run -- --release
+version: "3"
+
+dotenv: [".env"]
+
+vars:
+  LOG_DIR: "{{.HOME}}/Library/Logs/Orbit"
+  APP_PATTERN: "Orbit.app/Contents/MacOS/[o]rbit"
+
+tasks:
+  default:
+    desc: List the tasks
+    silent: true
+    cmd: task --list
+
+  # --- Checks (CLAUDE.md "Verification") ---
+
+  fmt:
+    desc: Format the workspace
+    cmd: cargo fmt --all
+
+  fmt:check:
+    desc: Check formatting
+    cmd: cargo fmt --all -- --check
+
+  lint:
+    desc: Clippy on every target, warnings are errors
+    cmd: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    desc: Run the workspace tests (task test -- <filter>)
+    cmd: cargo test --workspace --all-features {{.CLI_ARGS}}
+
+  portable:
+    desc: Check that domain/app/runtime build without macOS
+    cmd: scripts/check-portable.sh
+
+  check:
+    desc: fmt:check, lint and test in order, as required after Rust changes
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: test
+
+  ci:
+    desc: check plus the portability check
+    cmds:
+      - task: check
+      - task: portable
+
+  # --- App ---
+
+  run:
+    desc: Build, sign and launch Orbit.app (task run -- --release)
+    cmd: scripts/bundle.sh {{.CLI_ARGS}}
+
+  bundle:
+    desc: Build and sign Orbit.app without launching it
+    cmd: scripts/bundle.sh --build-only {{.CLI_ARGS}}
+
+  stop:
+    desc: Stop the running Orbit.app
+    cmd: pkill -TERM -f "{{.APP_PATTERN}}" || echo "Orbit is not running"
+
+  log:
+    desc: Follow the Orbit log
+    cmd: tail -f "{{.LOG_DIR}}/orbit.log"
+
+  guard:
+    desc: Kill Orbit on the first "event tap disabled" (run before revoking Accessibility)
+    cmd: >-
+      tail -n0 -F "{{.LOG_DIR}}/orbit.log"
+      | grep -m1 "event tap disabled"
+      && pkill -KILL -f "{{.APP_PATTERN}}"
+
+  identities:
+    desc: List code signing identities for ORBIT_SIGN_IDENTITY
+    cmd: security find-identity -v -p codesigning
+
+  # --- Spikes ---
+
+  spike:
+    desc: Build, sign and launch the stage 0 spike
+    cmd: scripts/bundle-spike.sh {{.CLI_ARGS}}
+
+  spike:ui:
+    desc: Build, sign and launch the stage 5 UI spike
+    cmd: scripts/bundle-spike.sh --example spike_ui {{.CLI_ARGS}}
+
+  spike:log:
+    desc: Follow the spike log
+    cmd: tail -f "{{.LOG_DIR}}/spike.log"
+
+  ref:
+    desc: Run the SwiftUI reference menu (task ref -- --dump-once --appearance light)
+    dir: scripts/swiftui-ref
+    cmd: swift run SwiftUIRef {{.CLI_ARGS}}
+
+  ref:log:
+    desc: Follow the SwiftUI reference log
+    cmd: tail -f "{{.LOG_DIR}}/swiftui-ref.log"
