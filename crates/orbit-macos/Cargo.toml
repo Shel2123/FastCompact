@@ -12,9 +12,11 @@ orbit-domain.workspace = true
 orbit-runtime.workspace = true
 dispatch2.workspace = true
 global-hotkey.workspace = true
+block2.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "std",
+    "block2",
     "libc",
     "objc2-core-foundation",
     "objc2-core-graphics",
@@ -26,20 +28,27 @@ objc2-app-kit = { workspace = true, features = [
     "NSColor",
     "NSColorSpace",
     "NSControl",
+    "NSEvent",
+    "NSFont",
     "NSGlassEffectView",
     "NSGraphics",
     "NSGraphicsContext",
     "NSImage",
     "NSImageRep",
+    "NSImageView",
+    "NSLayoutConstraint",
     "NSMenu",
     "NSMenuItem",
     "NSPanel",
+    "NSParagraphStyle",
     "NSResponder",
     "NSRunningApplication",
     "NSScreen",
     "NSStatusBar",
     "NSStatusBarButton",
     "NSStatusItem",
+    "NSText",
+    "NSTextField",
     "NSView",
     "NSVisualEffectView",
     "NSWindow",
@@ -78,11 +87,15 @@ objc2-core-graphics = { workspace = true, features = [
 ] }
 objc2-foundation = { workspace = true, features = [
     "std",
+    "block2",
     "NSArray",
+    "NSDate",
     "NSEnumerator",
     "NSError",
     "NSGeometry",
+    "NSRunLoop",
     "NSString",
+    "NSTimer",
     "NSURL",
     "NSValue",
 ] }

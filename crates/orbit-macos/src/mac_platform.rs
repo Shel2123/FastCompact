@@ -20,7 +20,8 @@ use crate::platform::event_tap::tap::{EventTap, TapError, TapOptions};
 use crate::platform::finder_target::FinderSelectionResolver;
 use crate::platform::hotkey::{HotkeyAdapter, HotkeyError, forward_signals};
 use crate::platform::permissions::{PermissionPrompt, accessibility_trusted};
-use crate::ui::logging::{LoggingFeedback, LoggingMenuView, LoggingParametersView, LoggingShell};
+use crate::ui::feedback::MacFeedback;
+use crate::ui::logging::{LoggingMenuView, LoggingParametersView, LoggingShell};
 use crate::ui::radial_panel::RadialMenu;
 use crate::ui::status_item::status_item;
 
@@ -125,7 +126,7 @@ impl Platform for MacPlatform {
         Views {
             menu,
             parameters: Box::new(LoggingParametersView),
-            feedback: Box::new(LoggingFeedback),
+            feedback: Box::new(MacFeedback::new(self.mtm, self.options.menu_background)),
             shell: Box::new(LoggingShell),
         }
     }

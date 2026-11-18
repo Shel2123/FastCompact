@@ -110,6 +110,15 @@ pub struct SlotState {
     pub available: bool,
 }
 
+/// Nearly opaque fill for Reduce Transparency and the plain background: the
+/// disc of the menu and the panels.
+pub const fn opaque_fill(theme: Theme) -> Rgba {
+    match theme {
+        Theme::Dark => Rgba::new(0.12, 0.12, 0.14, 0.96),
+        Theme::Light => Rgba::new(0.96, 0.96, 0.97, 0.96),
+    }
+}
+
 /// Colors of the menu for one theme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
@@ -132,10 +141,7 @@ impl Palette {
     /// Opaque disc under the sectors, for Reduce Transparency and the plain
     /// background.
     pub const fn disc(&self) -> Rgba {
-        match self.theme {
-            Theme::Dark => Rgba::new(0.12, 0.12, 0.14, 0.96),
-            Theme::Light => Rgba::new(0.96, 0.96, 0.97, 0.96),
-        }
+        opaque_fill(self.theme)
     }
 
     const fn highlight(&self, slot: usize) -> &Accent {

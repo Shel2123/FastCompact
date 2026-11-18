@@ -1,14 +1,13 @@
-//! Stand-ins for the views and the shell until stages 5 and 6: the menu and
-//! the form (stage 5), the clipboard, Reveal and info (stage 6). They only
-//! log what they would show.
+//! Stand-ins that only log what they would show: the menu when the radial
+//! menu cannot be built (a degraded mode), the form until stages 8 and 9,
+//! and the shell until step 4 of stage 6.
 
 use std::path::Path;
 
 use orbit_app::catalog::MenuModel;
-use orbit_app::messages::{GestureId, JobId, Notice, ParameterError, ParametersModel, Progress};
-use orbit_app::ports::{Feedback, MenuView, ParametersView, Shell, ShellError};
+use orbit_app::messages::{GestureId, ParameterError, ParametersModel};
+use orbit_app::ports::{MenuView, ParametersView, Shell, ShellError};
 use orbit_app::state::Highlight;
-use orbit_domain::target::FileTarget;
 use tracing::info;
 
 /// Logs the menu.
@@ -44,24 +43,6 @@ impl ParametersView for LoggingParametersView {
 
     fn hide(&mut self) {
         info!("hide parameters");
-    }
-}
-
-/// Logs progress, notices and information.
-#[derive(Debug, Default)]
-pub struct LoggingFeedback;
-
-impl Feedback for LoggingFeedback {
-    fn job_progress(&mut self, job: JobId, progress: Progress) {
-        info!(job = job.get(), ?progress, "job progress");
-    }
-
-    fn notify(&mut self, notice: &Notice) {
-        info!(?notice, "notify");
-    }
-
-    fn show_info(&mut self, target: &FileTarget) {
-        info!(?target, "show info");
     }
 }
 
