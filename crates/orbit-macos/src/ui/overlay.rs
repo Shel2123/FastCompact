@@ -49,10 +49,13 @@ impl Overlay {
         // A click must go to the application below.
         window.setIgnoresMouseEvents(true);
         window.setHidesOnDeactivate(false);
+        // Shown on the desktop where the user is, and left there when the
+        // user moves to another one: not on all Spaces and not floating
+        // across them (`Transient`), unlike the menu, which lives only while
+        // the hotkey is held.
         window.setCollectionBehavior(
-            NSWindowCollectionBehavior::CanJoinAllSpaces
-                | NSWindowCollectionBehavior::FullScreenAuxiliary
-                | NSWindowCollectionBehavior::Transient,
+            NSWindowCollectionBehavior::MoveToActiveSpace
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
         let content = NSView::initWithFrame(NSView::alloc(mtm), frame);
         window.setContentView(Some(&content));
