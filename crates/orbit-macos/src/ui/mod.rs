@@ -3,6 +3,7 @@
 pub mod backdrop;
 pub mod delegate;
 pub mod feedback;
+mod info_close;
 pub mod logging;
 mod menu_session;
 mod notice_text;
