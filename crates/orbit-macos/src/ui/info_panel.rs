@@ -181,6 +181,14 @@ impl InfoPanel {
         self.overlay.hide();
     }
 
+    /// Replaces the value of fact `index`, shown or not. The value is one
+    /// line at a fixed width, so nothing else moves.
+    pub(super) fn set_fact(&self, index: usize, value: &str) {
+        if let Some((_, field)) = self.facts.get(index) {
+            field.setStringValue(&NSString::from_str(value));
+        }
+    }
+
     /// Puts `path` in its field, cut in the middle if it takes more than
     /// [`PATH_LINES`] lines at `column` points, and returns its height.
     fn fit_path(&self, path: &str, column: f64) -> f64 {

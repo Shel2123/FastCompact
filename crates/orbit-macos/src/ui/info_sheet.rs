@@ -1,5 +1,6 @@
 //! What the info panel says about a target: its name, a few facts and its
-//! path, as read when the gesture started. Nothing here reads the disk.
+//! path, as read when the gesture started. Nothing here reads the disk: the
+//! size of a folder is counted elsewhere and written in with [`size_text`].
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,6 +11,11 @@ use objc2_foundation::{
 };
 use orbit_domain::target::{FileKind, FileTarget, ImageFacts, ImageFormat};
 
+use crate::platform::folder_size::FolderSize;
+
+/// Where the Size row is among the facts, when there is one.
+pub(super) const SIZE_ROW: usize = 1;
+
 /// The text of the info panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InfoSheet {
@@ -19,6 +25,9 @@ pub(super) struct InfoSheet {
     pub facts: Vec<InfoRow>,
     /// The full path, shown last: it may take several lines.
     pub path: String,
+    /// The size is still to be counted (a folder or a package): the Size
+    /// row says so until the count is written in.
+    pub counting: bool,
 }
 
 /// One fact: a label and its value.
@@ -30,14 +39,17 @@ pub(super) struct InfoRow {
 
 /// How sizes and dates are written.
 pub(super) trait Formats {
-    /// A size in bytes.
+    /// A size in bytes, with the exact count: "1.2 MB (1,234,567 bytes)".
     fn bytes(&self, size: u64) -> String;
+    /// A size in bytes, rounded only: "1.2 MB".
+    fn bytes_short(&self, size: u64) -> String;
     /// A moment.
     fn date(&self, at: SystemTime) -> String;
 }
 
-/// The sheet for `target`: Kind, Size (files only), Modified and Image
-/// (images only), then the path.
+/// The sheet for `target`: Kind, Size (not for a symbolic link), Modified
+/// and Image (images only), then the path. The size of a folder or a
+/// package is not known yet; its row starts as "Calculating…".
 pub(super) fn info_sheet(target: &FileTarget, formats: &impl Formats) -> InfoSheet {
     let path = target.path.to_string_lossy().into_owned();
     let title = target
@@ -47,14 +59,48 @@ pub(super) fn info_sheet(target: &FileTarget, formats: &impl Formats) -> InfoShe
 
     let mut facts = Vec::with_capacity(4);
     facts.push(row("Kind", kind_name(target.facts.kind)));
-    if target.facts.kind == FileKind::File {
-        facts.push(row("Size", formats.bytes(target.version.size)));
+    let counting = matches!(target.facts.kind, FileKind::Directory | FileKind::Package);
+    match target.facts.kind {
+        FileKind::File => facts.push(row("Size", formats.bytes(target.version.size))),
+        FileKind::Directory | FileKind::Package => {
+            facts.push(row("Size", size_text(&SizeState::Counting(None), formats)));
+        }
+        FileKind::Symlink => {}
     }
     facts.push(row("Modified", formats.date(target.version.modified)));
     if let Some(image) = target.facts.image {
         facts.push(row("Image", image_text(image)));
     }
-    InfoSheet { title, facts, path }
+    InfoSheet {
+        title,
+        facts,
+        path,
+        counting,
+    }
+}
+
+/// Where the count of a folder is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SizeState {
+    /// Still counting; the sum so far, once there is one to show.
+    Counting(Option<u64>),
+    Done(FolderSize),
+}
+
+/// The value of the Size row of a folder. A running sum and a sum with
+/// unreadable parts are rounded only, to stay on one line.
+pub(super) fn size_text(state: &SizeState, formats: &impl Formats) -> String {
+    match *state {
+        SizeState::Counting(None) => "Calculating…".to_owned(),
+        SizeState::Counting(Some(bytes)) => format!("Calculating… {}", formats.bytes_short(bytes)),
+        SizeState::Done(FolderSize {
+            bytes,
+            unreadable: 0,
+        }) => formats.bytes(bytes),
+        SizeState::Done(FolderSize { bytes, .. }) => {
+            format!("At least {}", formats.bytes_short(bytes))
+        }
+    }
 }
 
 fn row(label: &'static str, value: impl Into<String>) -> InfoRow {
@@ -87,6 +133,7 @@ fn image_text(image: ImageFacts) -> String {
 /// [`Formats`] of the user's locale, as Finder writes them.
 pub(super) struct MacFormats {
     bytes: Retained<NSByteCountFormatter>,
+    bytes_short: Retained<NSByteCountFormatter>,
     date: Retained<NSDateFormatter>,
 }
 
@@ -97,17 +144,28 @@ impl MacFormats {
         bytes.setCountStyle(NSByteCountFormatterCountStyle::File);
         // "1.2 MB (1,234,567 bytes)", like Get Info.
         bytes.setIncludesActualByteCount(true);
+        let bytes_short = NSByteCountFormatter::new();
+        bytes_short.setCountStyle(NSByteCountFormatterCountStyle::File);
         let date = NSDateFormatter::new();
         date.setDateStyle(NSDateFormatterStyle::MediumStyle);
         date.setTimeStyle(NSDateFormatterStyle::ShortStyle);
-        Self { bytes, date }
+        Self {
+            bytes,
+            bytes_short,
+            date,
+        }
     }
 }
 
 impl Formats for MacFormats {
     fn bytes(&self, size: u64) -> String {
-        let size = i64::try_from(size).unwrap_or(i64::MAX);
-        self.bytes.stringFromByteCount(size).to_string()
+        self.bytes.stringFromByteCount(byte_count(size)).to_string()
+    }
+
+    fn bytes_short(&self, size: u64) -> String {
+        self.bytes_short
+            .stringFromByteCount(byte_count(size))
+            .to_string()
     }
 
     fn date(&self, at: SystemTime) -> String {
@@ -118,6 +176,11 @@ impl Formats for MacFormats {
         let date = NSDate::dateWithTimeIntervalSince1970(seconds);
         self.date.stringFromDate(&date).to_string()
     }
+}
+
+/// `size` as Foundation takes it; past `i64::MAX` it is capped.
+fn byte_count(size: u64) -> i64 {
+    i64::try_from(size).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
@@ -137,6 +200,10 @@ mod tests {
     impl Formats for Plain {
         fn bytes(&self, size: u64) -> String {
             format!("{size} B")
+        }
+
+        fn bytes_short(&self, size: u64) -> String {
+            format!("~{size} B")
         }
 
         fn date(&self, at: SystemTime) -> String {
@@ -189,22 +256,63 @@ mod tests {
             ]
         );
         assert_eq!(sheet.path, "/Users/me/notes.txt");
+        assert!(!sheet.counting);
+        assert_eq!(sheet.facts[SIZE_ROW].label, "Size");
     }
 
     #[test]
-    fn folders_packages_and_links_have_no_size() {
+    fn folders_and_packages_start_counting_their_size() {
         for (kind, name) in [
             (FileKind::Directory, "Folder"),
             (FileKind::Package, "Package"),
-            (FileKind::Symlink, "Symbolic link"),
         ] {
             let sheet = sheet("/Applications/Thing.app", kind, None);
             assert_eq!(
                 facts(&sheet),
-                vec![("Kind", name), ("Modified", "@1700000000")],
+                vec![
+                    ("Kind", name),
+                    ("Size", "Calculating…"),
+                    ("Modified", "@1700000000"),
+                ],
                 "{kind:?}"
             );
+            assert!(sheet.counting, "{kind:?}");
+            assert_eq!(sheet.facts[SIZE_ROW].label, "Size");
         }
+    }
+
+    #[test]
+    fn a_link_has_no_size() {
+        let sheet = sheet("/tmp/link", FileKind::Symlink, None);
+        assert_eq!(
+            facts(&sheet),
+            vec![("Kind", "Symbolic link"), ("Modified", "@1700000000")]
+        );
+        assert!(!sheet.counting);
+    }
+
+    #[test]
+    fn the_size_of_a_folder_reads_by_its_state() {
+        let text = |state| size_text(&state, &Plain);
+        assert_eq!(text(SizeState::Counting(None)), "Calculating…");
+        assert_eq!(
+            text(SizeState::Counting(Some(5000))),
+            "Calculating… ~5000 B"
+        );
+        assert_eq!(
+            text(SizeState::Done(FolderSize {
+                bytes: 5000,
+                unreadable: 0
+            })),
+            "5000 B"
+        );
+        assert_eq!(
+            text(SizeState::Done(FolderSize {
+                bytes: 5000,
+                unreadable: 3
+            })),
+            "At least ~5000 B"
+        );
     }
 
     #[test]
@@ -252,6 +360,7 @@ mod tests {
             "{size}"
         );
         assert!(!formats.bytes(u64::MAX).is_empty());
+        assert!(formats.bytes_short(1_234_567).len() < size.len(), "{size}");
         assert!(
             !formats
                 .date(UNIX_EPOCH + Duration::from_secs(1_700_000_000))

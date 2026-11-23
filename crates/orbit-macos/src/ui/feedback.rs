@@ -1,6 +1,8 @@
 //! What the user is told besides the menu: toasts and the info panel.
 
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use objc2::MainThreadMarker;
@@ -13,6 +15,7 @@ use super::backdrop::Background;
 use super::info_close::CloseWatch;
 use super::info_panel::InfoPanel;
 use super::info_sheet::{MacFormats, info_sheet};
+use super::info_size::SizeJob;
 use super::notice_text::notice_text;
 use super::toast::Toast;
 
@@ -21,9 +24,11 @@ pub struct MacFeedback {
     mtm: MainThreadMarker,
     toast: Toast,
     info: Rc<InfoPanel>,
-    formats: MacFormats,
+    formats: Rc<MacFormats>,
     /// What closes the info panel while it is on screen.
     watch: Option<CloseWatch>,
+    /// The count of the folder whose info is on screen, if any.
+    size: Option<SizeJob>,
     /// Debug switch: each "show info" shows the panel twice in a row.
     info_twice: bool,
 }
@@ -39,8 +44,9 @@ impl MacFeedback {
             mtm,
             toast: Toast::new(mtm, background),
             info: Rc::new(InfoPanel::new(mtm, background)),
-            formats: MacFormats::new(),
+            formats: Rc::new(MacFormats::new()),
             watch: None,
+            size: None,
             info_twice,
         }
     }
@@ -51,13 +57,18 @@ impl MacFeedback {
     /// stopped, so no panel stays up with nothing to close it.
     fn show_info_panel(&mut self, target: &FileTarget) {
         let started = Instant::now();
-        let sheet = info_sheet(target, &self.formats);
+        let sheet = info_sheet(target, self.formats.as_ref());
         let Some(frame) = self.info.prepare(&sheet) else {
             self.give_up("no display");
             return;
         };
+        // Raised when this panel closes or is replaced, so that a count of
+        // its folder stops and writes nothing more.
+        let cancel = Arc::new(AtomicBool::new(false));
         let panel = Rc::downgrade(&self.info);
+        let closed = Arc::clone(&cancel);
         let Some(watch) = CloseWatch::start(self.mtm, move || {
+            closed.store(true, Ordering::Relaxed);
             if let Some(panel) = panel.upgrade() {
                 panel.hide();
             }
@@ -67,8 +78,18 @@ impl MacFeedback {
             return;
         };
         self.info.show(frame);
-        // The old watch stops as it is dropped: it never hides the new panel.
+        // The old watch and count stop as they are dropped: neither touches
+        // the new panel.
         self.watch = Some(watch);
+        self.size = sheet.counting.then(|| {
+            SizeJob::start(
+                self.mtm,
+                target.path.clone(),
+                cancel,
+                Rc::downgrade(&self.info),
+                Rc::clone(&self.formats),
+            )
+        });
         // Layout, monitors and ordering the window in; not the first frame
         // on screen, which is drawn later.
         debug!(elapsed = ?started.elapsed(), "info panel shown");
@@ -77,6 +98,7 @@ impl MacFeedback {
     fn give_up(&mut self, reason: &str) {
         error!(reason, "the info panel is not shown");
         self.watch = None;
+        self.size = None;
         self.info.hide();
     }
 }

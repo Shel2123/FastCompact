@@ -6,6 +6,7 @@ pub mod feedback;
 mod info_close;
 mod info_panel;
 mod info_sheet;
+mod info_size;
 pub mod logging;
 mod menu_session;
 mod notice_text;
