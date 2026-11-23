@@ -5,7 +5,8 @@
 //! global one for the events of other applications and a local one for
 //! the events sent to Orbit itself (its item in the menu bar), which a
 //! global monitor does not see. The local monitor passes every event on
-//! unchanged.
+//! unchanged. The watch starts only with both: with one missing the panel
+//! would stay up after a click that should close it.
 //!
 //! Releasing a modifier never closes the panel: the panel appears when the
 //! gesture ends, often while the other modifiers of the hotkey are still
@@ -153,8 +154,9 @@ pub(super) struct CloseWatch {
 
 impl CloseWatch {
     /// Starts watching; `on_close` runs once, on the first event that
-    /// closes the panel.
-    pub(super) fn start(mtm: MainThreadMarker, on_close: impl FnOnce() + 'static) -> Self {
+    /// closes the panel. `None` when either monitor cannot be added: the one
+    /// that was added is removed again and `on_close` never runs.
+    pub(super) fn start(mtm: MainThreadMarker, on_close: impl FnOnce() + 'static) -> Option<Self> {
         let shared = Rc::new(RefCell::new(Shared {
             rule: CloseRule::new(NSEventModifierFlags::empty()),
             on_close: Some(Box::new(on_close)),
@@ -179,12 +181,19 @@ impl CloseWatch {
             unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(WATCHED, &block) }
         };
         if global.is_none() {
-            warn!("no global event monitor; the info panel does not close on other applications");
+            warn!("no global event monitor; the info panel would not close on other applications");
         }
         if local.is_none() {
-            warn!("no local event monitor; the info panel does not close on clicks at Orbit");
+            warn!("no local event monitor; the info panel would not close on clicks at Orbit");
         }
-        let (has_global, has_local) = (global.is_some(), local.is_some());
+        let (global, local) = match (global, local) {
+            (Some(global), Some(local)) => (global, local),
+            (global, local) => {
+                let added: Vec<_> = global.into_iter().chain(local).collect();
+                remove_later(mtm, added);
+                return None;
+            }
+        };
 
         // The modifiers are read after the monitors are in place. Handlers
         // run on the main thread from the run loop, so none runs before
@@ -194,18 +203,16 @@ impl CloseWatch {
         let installed = {
             let mut shared = shared.borrow_mut();
             shared.rule = CloseRule::new(current);
-            shared.monitors.extend(global);
-            shared.monitors.extend(local);
+            shared.monitors.push(global);
+            shared.monitors.push(local);
             shared.monitors.len()
         };
         info!(
             installed,
-            global = has_global,
-            local = has_local,
             flags = %Mods(current & MODIFIERS),
             "info watch started"
         );
-        Self { mtm, shared }
+        Some(Self { mtm, shared })
     }
 }
 

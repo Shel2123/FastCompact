@@ -28,8 +28,7 @@ pub fn place_panel(
     screens: &[Display],
     margin: f64,
 ) -> Option<ScreenRect> {
-    let display = display_at(anchor, screens)?;
-    let area = inset(display.visible, margin);
+    let area = panel_area(anchor, screens, margin)?;
     let width = wanted.0.min(area.width).max(0.0);
     let height = wanted.1.min(area.height).max(0.0);
     let right = area.origin.x + area.width;
@@ -46,6 +45,14 @@ pub fn place_panel(
     let x = x.clamp(area.origin.x, right - width);
     let y = y.clamp(area.origin.y, top - height);
     Some(ScreenRect::new(x, y, width, height))
+}
+
+/// The area a panel next to `anchor` stays inside: the visible frame of the
+/// display chosen as in [`place_panel`], without `margin` on each side; or
+/// `None` when there is no display. A panel that depends on its width for
+/// its height learns that width from here before it is laid out.
+pub fn panel_area(anchor: ScreenPoint, screens: &[Display], margin: f64) -> Option<ScreenRect> {
+    display_at(anchor, screens).map(|display| inset(display.visible, margin))
 }
 
 /// The display that holds `point`, or the nearest one.
@@ -250,6 +257,19 @@ mod tests {
         .unwrap_or_else(|| panic!("no frame"));
         assert_eq!(frame.width, 1440.0 - 2.0 * MARGIN);
         inside(frame, primary());
+    }
+
+    #[test]
+    fn the_area_is_the_one_the_panel_is_kept_inside() {
+        let screens = [primary(), left_below()];
+        // On a display with a negative origin, and outside every display.
+        for (x, y) in [(-600.0, 100.0), (-5000.0, -5000.0)] {
+            let anchor = ScreenPoint::new(x, y);
+            let area = panel_area(anchor, &screens, MARGIN);
+            assert_eq!(area, Some(inset(left_below().visible, MARGIN)));
+            inside(place(x, y, &screens), left_below());
+        }
+        assert_eq!(panel_area(ScreenPoint::new(0.0, 0.0), &[], MARGIN), None);
     }
 
     #[test]

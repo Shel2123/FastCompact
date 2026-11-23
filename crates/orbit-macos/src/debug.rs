@@ -35,6 +35,9 @@ pub struct MacOptions {
     /// `ORBIT_DEBUG_MENU_SHIFT=dx,dy`: the menu window is put this many
     /// points away from where it should be, to see the disc follow it.
     pub menu_shift: (i32, i32),
+    /// `ORBIT_DEBUG_INFO_TWICE=1`: each "show info" shows the info panel
+    /// twice in a row, to see the second replace the first.
+    pub info_twice: bool,
 }
 
 impl MacOptions {
@@ -58,6 +61,7 @@ impl MacOptions {
             no_poll: flag("ORBIT_DEBUG_NO_POLL"),
             menu_background: menu_background(),
             menu_shift: menu_shift(),
+            info_twice: flag("ORBIT_DEBUG_INFO_TWICE"),
         };
         if settings != Self::default() {
             warn!(?settings, "debug switches are on");

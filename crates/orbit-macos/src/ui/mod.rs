@@ -4,6 +4,8 @@ pub mod backdrop;
 pub mod delegate;
 pub mod feedback;
 mod info_close;
+mod info_panel;
+mod info_sheet;
 pub mod logging;
 mod menu_session;
 mod notice_text;

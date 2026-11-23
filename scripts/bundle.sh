@@ -14,6 +14,8 @@
 #   ORBIT_DEBUG_SECURE_PULSE      "1": secure keyboard entry on 200 ms after
 #                                 each press, off 500 ms later
 #   ORBIT_DEBUG_NO_POLL           "1": the event tap runs without its watchdog
+#   ORBIT_DEBUG_INFO_TWICE        "1": each "show info" shows the info panel
+#                                 twice in a row (docs/stage-6.md)
 # All ORBIT_DEBUG_* variables are passed to the app through `open --env`.
 set -euo pipefail
 

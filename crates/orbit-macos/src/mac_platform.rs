@@ -127,7 +127,11 @@ impl Platform for MacPlatform {
         Views {
             menu,
             parameters: Box::new(LoggingParametersView),
-            feedback: Box::new(MacFeedback::new(self.mtm, self.options.menu_background)),
+            feedback: Box::new(MacFeedback::new(
+                self.mtm,
+                self.options.menu_background,
+                self.options.info_twice,
+            )),
             shell: Box::new(MacShell::new(self.mtm)),
         }
     }
