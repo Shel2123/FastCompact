@@ -1,0 +1,212 @@
+# Builds and tests Orbit on macOS (arm64) and Windows (x64) and packages
+# each build as a ZIP with the license and the third-party notices.
+#
+# - Pull requests to main and manual runs build, test and check the ZIPs.
+# - Pushing a beta tag (v<version>-beta.<n>, equal to the workspace version)
+#   also publishes a GitHub pre-release with docs/releases/<tag>.md as its
+#   notes.
+name: Build and release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.97.1"
+
+jobs:
+  meta:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read the version and check the tag
+        id: version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "orbit-desktop") | .version')"
+          echo "version: $version"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
+              exit 1
+            fi
+            if [ ! -f "docs/releases/$GITHUB_REF_NAME.md" ]; then
+              echo "::error::docs/releases/$GITHUB_REF_NAME.md is missing"
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS arm64
+    needs: meta
+    runs-on: macos-15
+    env:
+      PKG: Orbit-${{ needs.meta.outputs.version }}-macos-arm64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --locked --workspace --all-features
+      - name: Build Orbit.app
+        run: scripts/bundle.sh --build-only --release
+      - name: Package
+        run: |
+          mkdir -p "dist/$PKG"
+          ditto target/bundle/Orbit.app "dist/$PKG/Orbit.app"
+          cp LICENSE "dist/$PKG/"
+          python3 scripts/third_party_notices.py --target aarch64-apple-darwin \
+            --output "dist/$PKG/THIRD-PARTY-NOTICES.txt"
+          (cd dist && ditto -c -k --keepParent "$PKG" "$PKG.zip")
+      - name: Check the archive
+        run: |
+          check="$RUNNER_TEMP/check"
+          rm -rf "$check"
+          mkdir -p "$check"
+          ditto -x -k "dist/$PKG.zip" "$check"
+          app="$check/$PKG/Orbit.app"
+          codesign --verify --strict --verbose=2 "$app"
+          archs="$(lipo -archs "$app/Contents/MacOS/orbit")"
+          echo "architectures: $archs"
+          if [ "$archs" != arm64 ]; then
+            echo "::error::expected arm64, got $archs"
+            exit 1
+          fi
+          test -s "$check/$PKG/LICENSE"
+          test -s "$check/$PKG/THIRD-PARTY-NOTICES.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orbit-macos
+          path: dist/${{ env.PKG }}.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    needs: meta
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PKG: Orbit-${{ needs.meta.outputs.version }}-windows-x64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          rustup toolchain install $env:RUST_TOOLCHAIN --profile minimal -c clippy
+          rustup default $env:RUST_TOOLCHAIN
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --locked --workspace --all-features
+      - name: Build orbit.exe
+        run: cargo build --locked --release -p orbit-desktop
+      - name: Package
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dir = "dist/$env:PKG"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/release/orbit.exe, LICENSE $dir
+          python scripts/third_party_notices.py --target x86_64-pc-windows-msvc `
+            --output "$dir/THIRD-PARTY-NOTICES.txt"
+          Compress-Archive -Path $dir -DestinationPath "dist/$env:PKG.zip"
+      - name: Check the archive
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $check = Join-Path $env:RUNNER_TEMP check
+          Remove-Item -Recurse -Force $check -ErrorAction SilentlyContinue
+          Expand-Archive "dist/$env:PKG.zip" $check
+          $root = Join-Path $check $env:PKG
+          foreach ($file in "LICENSE", "THIRD-PARTY-NOTICES.txt") {
+            if (-not (Test-Path (Join-Path $root $file))) { throw "the archive has no $file" }
+          }
+          $exe = Join-Path $root orbit.exe
+
+          # The embedded manifest: resource RT_MANIFEST #1.
+          $mt = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\mt.exe" |
+            Where-Object { $_.Directory.Parent.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+            Select-Object -First 1
+          if (-not $mt) { throw "mt.exe not found" }
+          $manifest = Join-Path $check orbit.manifest
+          & $mt.FullName -nologo "-inputresource:$exe;#1" "-out:$manifest"
+          [xml]$xml = Get-Content -Raw $manifest
+          $dpi = $xml.SelectSingleNode("//*[local-name()='dpiAwareness']")
+          if (-not $dpi) { throw "the manifest has no dpiAwareness" }
+          Write-Host "dpiAwareness: $($dpi.InnerText)"
+          if (($dpi.InnerText -split ',' | ForEach-Object { $_.Trim() }) -notcontains 'PerMonitorV2') {
+            throw "dpiAwareness does not include PerMonitorV2"
+          }
+
+          # Imported DLLs: no dynamic C runtime, so no Visual C++ Redistributable.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -products * -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' |
+            Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe not found" }
+          $deps = & $dumpbin /NOLOGO /DEPENDENTS $exe
+          $deps | Write-Host
+          $crt = $deps | Where-Object {
+            $_ -match '^\s*(vcruntime\S*|msvcp\S*|ucrtbase|api-ms-win-crt-\S*)\.dll\s*$'
+          }
+          if ($crt) { throw "orbit.exe imports the dynamic C runtime: $($crt.Trim() -join ', ')" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orbit-windows
+          path: dist/${{ env.PKG }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish the pre-release
+    needs: [meta, macos, windows]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-beta.')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: orbit-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum "Orbit-$VERSION-macos-arm64.zip" "Orbit-$VERSION-windows-x64.zip" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --verify-tag \
+            --title "Orbit $VERSION" --notes-file "docs/releases/$TAG.md" \
+            "dist/Orbit-$VERSION-macos-arm64.zip" \
+            "dist/Orbit-$VERSION-windows-x64.zip" \
+            dist/SHA256SUMS.txt

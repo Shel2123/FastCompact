@@ -52,7 +52,7 @@ if pids="$(pgrep -f "$EXE_PATTERN")"; then
 fi
 
 # 2. Build.
-cargo_args=(build --manifest-path "$ROOT/Cargo.toml" -p orbit-desktop)
+cargo_args=(build --locked --manifest-path "$ROOT/Cargo.toml" -p orbit-desktop)
 [[ "$PROFILE" == release ]] && cargo_args+=(--release)
 cargo "${cargo_args[@]}"
 
