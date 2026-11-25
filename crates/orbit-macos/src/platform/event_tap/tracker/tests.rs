@@ -639,7 +639,7 @@ fn over_copy_path(center: ScreenPoint) -> QuartzPoint {
 
 fn gesture_over_copy_path(lose_space_up: bool) -> Vec<Effect> {
     let mut h = Harness::new();
-    let mut controller = AppController::new(FileNamePolicy::UNIVERSAL);
+    let mut controller = AppController::new(FileNamePolicy::UNIVERSAL, &ActionId::ALL);
     let mut effects = drive(&mut controller, h.hotkey());
     let center = match effects.as_slice() {
         [Effect::PresentMenu(model)] => model.center,

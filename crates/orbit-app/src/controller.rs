@@ -36,20 +36,21 @@ pub struct AppController {
 
 impl AppController {
     /// A controller with nothing open and the standard menu geometry.
+    ///
     /// `names` is the platform's rule for names typed in the Rename form.
-    pub fn new(names: FileNamePolicy) -> Self {
+    /// `supported_actions` are the actions the platform can carry out; the
+    /// slots of every other action are shown as
+    /// [`UnavailableReason::UnsupportedPlatform`] and choosing them does
+    /// nothing. Pass [`ActionId::ALL`] when the platform supports every
+    /// action.
+    pub fn new(names: FileNamePolicy, supported_actions: &'static [ActionId]) -> Self {
         Self {
             state: AppState::default(),
             geometry: MenuGeometry::standard(),
             next_job: JobId::FIRST,
             names,
-            supported_actions: &ActionId::ALL,
+            supported_actions,
         }
-    }
-
-    /// Restricts which actions may be selected on this platform.
-    pub fn set_supported_actions(&mut self, actions: &'static [ActionId]) {
-        self.supported_actions = actions;
     }
 
     /// Current state, for adapters that need to inspect it and for tests.
@@ -651,8 +652,12 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
+            Self::with_actions(&ActionId::ALL)
+        }
+
+        fn with_actions(actions: &'static [ActionId]) -> Self {
             Self {
-                controller: AppController::new(MACOS_NAMES),
+                controller: AppController::new(MACOS_NAMES, actions),
             }
         }
 
@@ -973,25 +978,68 @@ mod tests {
         assert_eq!(h.menu(), &MenuState::Closed);
     }
 
+    /// Supports only Show Info, like a platform that cannot carry out the
+    /// other actions yet.
+    const ONLY_INFO: &[ActionId] = &[ActionId::ShowInfo];
+
     #[test]
-    fn platform_unsupported_action_stays_inactive_for_a_supported_file_type() {
-        let mut h = Harness::new();
-        h.controller.set_supported_actions(&[ActionId::CopyPath]);
-        let center = h.open(A, MIDDLE, plain("/tmp/a"));
-        let zip = slot_of(ActionId::ArchiveZip);
-        let point = slot_point(center, zip);
+    fn unsupported_actions_are_shown_as_unsupported_by_the_platform() {
+        let mut h = Harness::with_actions(ONLY_INFO);
+        assert_eq!(h.invoke(A, MIDDLE), vec![Harness::resolve_target(A)]);
+        let effects = h.resolve(A, Ok(plain("/tmp/a")));
+        let [Effect::PresentMenu(model)] = effects.as_slice() else {
+            panic!("menu not presented: {effects:?}");
+        };
+        let all = menu_slots(&plain("/tmp/a").facts);
+        for (slot, expected) in model.slots.iter().zip(all) {
+            match slot.item {
+                MenuItem::Action(ActionId::ShowInfo) | MenuItem::Cancel => {
+                    assert_eq!(slot.availability, expected.availability, "{slot:?}");
+                }
+                MenuItem::Action(_) => assert_eq!(
+                    slot.availability,
+                    Availability::Unavailable(UnavailableReason::UnsupportedPlatform),
+                    "{slot:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn choosing_an_unsupported_action_has_no_effect_of_the_action() {
+        let mut h = Harness::with_actions(ONLY_INFO);
+        let actions = [
+            ActionId::CopyPath,
+            ActionId::Reveal,
+            ActionId::Rename,
+            ActionId::ArchiveZip,
+        ];
+        for (gesture, action) in (10..).map(GestureId).zip(actions) {
+            let center = h.open(gesture, MIDDLE, plain("/tmp/a"));
+            let slot = slot_of(action);
+            let point = slot_point(center, slot);
+            assert_eq!(
+                h.move_to(gesture, point),
+                vec![Effect::Highlight(Highlight::Inactive(slot))],
+                "{action:?}"
+            );
+            // No clipboard, no Explorer, no parameters form, no job.
+            assert_eq!(
+                h.release(gesture, point),
+                vec![Effect::HideMenu],
+                "{action:?}"
+            );
+            assert_eq!(h.menu(), &MenuState::Closed, "{action:?}");
+            assert!(h.controller.state().jobs.is_empty(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_supported_action_still_runs_when_others_are_unsupported() {
+        let mut h = Harness::with_actions(ONLY_INFO);
         assert_eq!(
-            h.move_to(A, point),
-            vec![Effect::Highlight(Highlight::Inactive(zip))]
-        );
-        assert_eq!(h.release(A, point), vec![Effect::HideMenu]);
-        assert!(h.controller.state().jobs.is_empty());
-        assert_eq!(
-            h.choose(B, plain("/tmp/a"), ActionId::CopyPath),
-            vec![
-                Effect::HideMenu,
-                Effect::WriteClipboard(PathBuf::from("/tmp/a"))
-            ]
+            h.choose(A, plain("/tmp/a"), ActionId::ShowInfo),
+            vec![Effect::HideMenu, Effect::ShowInfo(plain("/tmp/a"))]
         );
     }
 
@@ -1182,7 +1230,7 @@ mod tests {
     #[test]
     fn rename_follows_the_policy_of_the_platform() {
         let mut h = Harness::new();
-        h.controller = AppController::new(FileNamePolicy::UNIVERSAL);
+        h.controller = AppController::new(FileNamePolicy::UNIVERSAL, &ActionId::ALL);
         h.choose(A, plain("/tmp/report.txt"), ActionId::Rename);
         let effects = h.submit(A, ParameterInput::Rename("a:b".into()));
         let spec = started(&effects);

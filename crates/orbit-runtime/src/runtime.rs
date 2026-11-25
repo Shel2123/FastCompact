@@ -7,6 +7,7 @@ use std::sync::Arc;
 use orbit_app::controller::AppController;
 use orbit_app::messages::AppEvent;
 use orbit_app::ports::{EventSink, OperationExecutor};
+use orbit_domain::action::ActionId;
 use orbit_domain::operation::FileNamePolicy;
 use thiserror::Error;
 
@@ -34,13 +35,14 @@ impl Runtime {
         resolver: ResolverFactory,
         executor: Arc<dyn OperationExecutor>,
         names: FileNamePolicy,
+        actions: &'static [ActionId],
         views: Views,
         jobs: JobsConfig,
     ) -> io::Result<Self> {
         let resolver = ResolverThread::spawn(resolver, Arc::clone(&sink))?;
         let jobs = JobRunner::new(executor, Arc::clone(&sink), jobs)?;
         Ok(Self {
-            controller: AppController::new(names),
+            controller: AppController::new(names, actions),
             services: Services {
                 resolver,
                 jobs,
@@ -89,16 +91,15 @@ pub enum RunError {
 /// [`RunError::Start`] when the runtime cannot start, [`RunError::Platform`]
 /// when the platform fails.
 pub fn run<P: Platform>(mut platform: P, config: RuntimeConfig) -> Result<(), RunError> {
-    let actions = platform.supported_actions();
     let mut runtime = Runtime::new(
         platform.sink(),
         platform.resolver(),
         platform.executor(),
         platform.file_name_policy(),
+        platform.supported_actions(),
         platform.views(),
         config.jobs,
     )?;
-    runtime.controller.set_supported_actions(actions);
     platform
         .run(Box::new(move |event| runtime.handle(event)))
         .map_err(RunError::Platform)
@@ -114,7 +115,7 @@ mod tests {
     use orbit_app::messages::{GestureId, JobError, JobOutput, JobSpec, Notice, ResolveError};
     use orbit_app::ports::{JobContext, ResolveRequest, TargetResolver};
     use orbit_app::state::MenuState;
-    use orbit_domain::action::{ActionId, MENU_LAYOUT, MenuItem};
+    use orbit_domain::action::{Availability, MENU_LAYOUT, MenuItem, UnavailableReason};
     use orbit_domain::geometry::{MenuGeometry, ScreenPoint, ScreenRect};
     use orbit_domain::target::FileTarget;
 
@@ -148,12 +149,21 @@ mod tests {
     }
 
     fn runtime(gate: Option<Gate>, jobs: JobsConfig) -> (Runtime, ChannelSink) {
+        runtime_with(gate, jobs, &ActionId::ALL)
+    }
+
+    fn runtime_with(
+        gate: Option<Gate>,
+        jobs: JobsConfig,
+        actions: &'static [ActionId],
+    ) -> (Runtime, ChannelSink) {
         let sink = ChannelSink::new();
         let made = Runtime::new(
             sink.shared(),
             ResolverFactory::new(|| Resolves),
             Arc::new(Zips(gate)),
             FileNamePolicy::UNIVERSAL,
+            actions,
             views(&Journal::new(), None),
             jobs,
         );
@@ -377,6 +387,22 @@ mod tests {
                 Call::Notify(Notice::Refused(ResolveError::SecureInputOn)),
                 Call::Notify(Notice::Refused(ResolveError::AccessibilityDenied)),
             ]
+        );
+    }
+
+    #[test]
+    fn a_platform_supports_every_action_unless_it_says_otherwise() {
+        let actions = FakePlatform::new().supported_actions();
+        assert_eq!(actions, &ActionId::ALL);
+        let (mut runtime, sink) = runtime_with(None, JobsConfig::default(), actions);
+        open_menu(&mut runtime, &sink, A);
+        let MenuState::Open { slots, .. } = &runtime.controller.state().menu else {
+            panic!("menu not open");
+        };
+        let unsupported = Availability::Unavailable(UnavailableReason::UnsupportedPlatform);
+        assert!(
+            slots.iter().all(|slot| slot.availability != unsupported),
+            "{slots:?}"
         );
     }
 

@@ -120,7 +120,8 @@ impl Availability {
 /// Why an action is inactive for a target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnavailableReason {
-    /// The current platform does not implement the action.
+    /// The current platform does not implement the action. Takes the place
+    /// of any other reason, since the action cannot run for any target.
     UnsupportedPlatform,
     /// The action does not apply to this kind of object.
     UnsupportedKind,
