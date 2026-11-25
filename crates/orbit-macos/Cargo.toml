@@ -118,7 +118,8 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Used by the stage 0 spike example and the main-thread test; the spike
-# features move to [target.'cfg(target_os = "macos")'.dependencies] as the real adapters are written.
+# features move to the regular dependencies above as the real adapters are
+# written.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 block2.workspace = true
 global-hotkey.workspace = true

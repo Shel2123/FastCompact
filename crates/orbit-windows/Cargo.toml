@@ -11,7 +11,8 @@ orbit-app.workspace = true
 orbit-domain.workspace = true
 orbit-runtime.workspace = true
 tracing.workspace = true
-windows = { version = "0.62.2", features = [
+windows = { workspace = true, features = [
+    "std",
     "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",

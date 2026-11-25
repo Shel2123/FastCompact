@@ -1,10 +1,9 @@
 #[cfg(target_os = "macos")]
-#[path = "../main_thread.rs"]
-mod macos;
+mod app;
 
 #[cfg(target_os = "macos")]
 fn main() -> std::process::ExitCode {
-    macos::launch()
+    app::launch()
 }
 
 #[cfg(not(target_os = "macos"))]
