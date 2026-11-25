@@ -3,3 +3,4 @@
 pub mod archive;
 pub mod filesystem;
 pub mod image_io;
+pub mod unavailable;

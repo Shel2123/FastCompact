@@ -50,6 +50,8 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# The Windows application manifest of orbit.exe is a source file.
+!crates/orbit-desktop/orbit.exe.manifest
 
 # Installer logs
 pip-log.txt
@@ -183,3 +185,9 @@ cython_debug/
 
 # Claude Code local settings
 .claude/
+
+# macOS Finder metadata
+.DS_Store
+skills-lock.json
+CLAUDE.md
+.index-build/

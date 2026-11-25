@@ -1,0 +1,17 @@
+[package]
+name = "orbit-runtime"
+description = "Orbit runtime: the controller with the threads and platform ports that carry out its effects."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+orbit-app.workspace = true
+orbit-domain.workspace = true
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

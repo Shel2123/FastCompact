@@ -6,9 +6,230 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-[dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 orbit-app.workspace = true
 orbit-domain.workspace = true
+orbit-runtime.workspace = true
+dispatch2.workspace = true
+global-hotkey.workspace = true
+block2.workspace = true
+objc2 = { workspace = true, features = ["exception"] }
+objc2-app-kit = { workspace = true, features = [
+    "std",
+    "block2",
+    "libc",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "objc2-quartz-core",
+    "NSAccessibility",
+    "NSAppearance",
+    "NSApplication",
+    "NSButton",
+    "NSColor",
+    "NSColorSpace",
+    "NSControl",
+    "NSEvent",
+    "NSFont",
+    "NSGlassEffectView",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSImageView",
+    "NSLayoutConstraint",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPanel",
+    "NSParagraphStyle",
+    "NSPasteboard",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSText",
+    "NSTextField",
+    "NSView",
+    "NSVisualEffectView",
+    "NSWindow",
+    "NSWorkspace",
+] }
+objc2-application-services = { workspace = true, features = [
+    "std",
+    "libc",
+    "AXError",
+    "AXUIElement",
+    "HIServices",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "std",
+    "CFArray",
+    "CFDate",
+    "CFDictionary",
+    "CFMachPort",
+    "CFNumber",
+    "CFRunLoop",
+    "CFString",
+    "CFURL",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "std",
+    "libc",
+    "CGAffineTransform",
+    "CGColor",
+    "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGImage",
+    "CGPath",
+    "CGRemoteOperation",
+] }
+objc2-foundation = { workspace = true, features = [
+    "std",
+    "block2",
+    "NSArray",
+    "NSByteCountFormatter",
+    "NSDate",
+    "NSDateFormatter",
+    "NSEnumerator",
+    "NSError",
+    "NSFormatter",
+    "NSGeometry",
+    "NSRunLoop",
+    "NSString",
+    "NSTimer",
+    "NSURL",
+    "NSValue",
+] }
+objc2-quartz-core = { workspace = true, features = [
+    "std",
+    "bitflags",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "CAAnimation",
+    "CALayer",
+    "CAMediaTiming",
+    "CAShapeLayer",
+    "CATransaction",
+] }
+thiserror.workspace = true
+tracing.workspace = true
+
+# Used by the stage 0 spike example and the main-thread test; the spike
+# features move to the regular dependencies above as the real adapters are
+# written.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+block2.workspace = true
+global-hotkey.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "std",
+    "block2",
+    "libc",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "NSApplication",
+    "NSBezierPath",
+    "NSApplication",
+    "NSButton",
+    "NSColor",
+    "NSColorSpace",
+    "NSControl",
+    "NSEvent",
+    "NSGraphics",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPanel",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+    "NSAccessibility",
+    "NSAppearance",
+    "NSGlassEffectView",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSVisualEffectView",
+    "objc2-quartz-core",
+] }
+objc2-application-services = { workspace = true, features = [
+    "std",
+    "libc",
+    "AXError",
+    "AXUIElement",
+    "HIServices",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "std",
+    "CFArray",
+    "CFDate",
+    "CFDictionary",
+    "CFMachPort",
+    "CFNumber",
+    "CFRunLoop",
+    "CFString",
+    "CFURL",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "std",
+    "libc",
+    "CGAffineTransform",
+    "CGColor",
+    "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGImage",
+    "CGPath",
+    "CGRemoteOperation",
+] }
+objc2-foundation = { workspace = true, features = [
+    "std",
+    "NSArray",
+    "NSBundle",
+    "NSData",
+    "NSEnumerator",
+    "NSError",
+    "NSGeometry",
+    "NSJSONSerialization",
+    "NSString",
+] }
+objc2-quartz-core = { workspace = true, features = [
+    "std",
+    "bitflags",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "CAAnimation",
+    "CAMediaTiming",
+    "CAMediaTimingFunction",
+    "CALayer",
+    "CAShapeLayer",
+    "CATransaction",
+    "CATransform3D",
+] }
+tracing-subscriber.workspace = true
+
+[[example]]
+name = "spike"
+path = "examples/spike/entry.rs"
+
+[[example]]
+name = "spike_ui"
+path = "examples/spike_ui/entry.rs"
+# Runs the contrast tests that live next to the spike code.
+test = true
+
+[[test]]
+name = "main_thread"
+path = "tests/main_thread/entry.rs"
+harness = false
 
 [lints]
 workspace = true
