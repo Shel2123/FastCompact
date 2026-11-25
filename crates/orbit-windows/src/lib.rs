@@ -23,7 +23,7 @@ use orbit_domain::action::ActionId;
 use orbit_domain::geometry::{ScreenPoint, ScreenRect};
 use orbit_domain::operation::FileNamePolicy;
 use orbit_runtime::{Handler, Platform, PlatformError, ResolverFactory, Views};
-use tracing::warn;
+use tracing::{error, warn};
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
@@ -39,7 +39,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Error, HSTRING, Result, w};
 
 use explorer::{Apartment, ExplorerFocus, ExplorerResolver, ExplorerShell, Selection};
-use tray::{TRAY_MESSAGE, TRAY_RESTORE, Tray};
+use tray::Tray;
 use window::{Popup, RadialMenu, Window};
 
 const WAKE: u32 = WM_APP;
@@ -144,29 +144,25 @@ impl WindowsPlatform {
                         && let Some(area) = work_area(position)
                     {
                         sequence = sequence.wrapping_add(1);
-                        let id = GestureId(sequence);
+                        let start = GestureStart {
+                            focus,
+                            position,
+                            area,
+                            scale: self.scale,
+                        };
                         // A thread timer runs only while the hotkey is held.
                         // SAFETY: The UI thread owns the timer and receives its messages.
-                        let timer = unsafe { SetTimer(None, 0, 12, None) };
-                        if timer == 0 {
-                            return Err(Error::from_thread());
+                        let set_timer = || unsafe { SetTimer(None, 0, POLL_MS, None) };
+                        active = begin_gesture(
+                            GestureId(sequence),
+                            start,
+                            &self.selection,
+                            &self.sink,
+                            set_timer,
+                        );
+                        if active.is_some() {
+                            self.popup.hide();
                         }
-                        self.popup.hide();
-                        if let Ok(mut selection) = self.selection.lock() {
-                            *selection = Some((id, focus));
-                        }
-                        let point = screen_point(position, self.scale);
-                        active = Some(Gesture {
-                            id,
-                            point,
-                            focus,
-                            timer,
-                        });
-                        self.sink.send(AppEvent::Invoked {
-                            gesture: id,
-                            point,
-                            screens: vec![screen_rect(area, self.scale)],
-                        });
                     }
                 }
                 WM_TIMER
@@ -181,20 +177,6 @@ impl WindowsPlatform {
                         active = None;
                     }
                 }
-                TRAY_MESSAGE if message.hwnd == self.popup.0.handle => {
-                    if let Some(gesture) = active.take() {
-                        gesture.cancel(&self.sink);
-                        self.drain(&mut handler);
-                    }
-                    if tray.wants_exit(message.lParam)? {
-                        return Ok(());
-                    }
-                }
-                TRAY_RESTORE if message.hwnd == self.popup.0.handle => {
-                    if let Err(error) = tray.add() {
-                        warn!(%error, "could not restore the Orbit tray icon");
-                    }
-                }
                 _ => {
                     // SAFETY: The message came from this thread's Win32 queue.
                     unsafe {
@@ -204,7 +186,33 @@ impl WindowsPlatform {
                 }
             }
             self.drain(&mut handler);
+            if self.serve_tray(tray, &mut active, &mut handler) {
+                return Ok(());
+            }
         }
+    }
+
+    /// Handles what the tray window recorded, once and outside any nested
+    /// message loop. Returns whether Exit was chosen.
+    fn serve_tray(&self, tray: &Tray, active: &mut Option<Gesture>, handler: &mut Handler) -> bool {
+        let (click, restore) = self.popup.take_tray_requests();
+        if restore && let Err(error) = tray.add() {
+            warn!(%error, "could not restore the Orbit tray icon");
+        }
+        if click.is_none() {
+            return false;
+        }
+        if let Some(gesture) = active.take() {
+            gesture.cancel(&self.sink);
+            self.drain(handler);
+        }
+        let exit = tray.wants_exit().unwrap_or_else(|error| {
+            warn!(%error, "could not show the Orbit tray menu");
+            false
+        });
+        // A click on the icon while the menu was open belonged to the menu.
+        self.popup.discard_tray_click();
+        exit
     }
 
     fn drain(&self, handler: &mut Handler) {
@@ -287,6 +295,55 @@ impl OperationExecutor for InstantActions {
             "This action is unavailable on Windows.".into(),
         ))
     }
+}
+
+/// How often a held gesture reads the pointer and the keys.
+const POLL_MS: u32 = 12;
+
+/// What the hotkey press found.
+#[derive(Clone, Copy)]
+struct GestureStart {
+    focus: ExplorerFocus,
+    position: POINT,
+    area: RECT,
+    scale: f64,
+}
+
+/// Starts gesture `id` with the timer that `set_timer` makes (0 when it
+/// fails). The timer is made before anything is published, so a failure
+/// drops only this press: it is logged, the selection is cleared, nothing
+/// is sent, and the next press starts afresh.
+fn begin_gesture(
+    id: GestureId,
+    start: GestureStart,
+    selection: &Selection,
+    sink: &Sink,
+    set_timer: impl FnOnce() -> usize,
+) -> Option<Gesture> {
+    let timer = set_timer();
+    if let Ok(mut selection) = selection.lock() {
+        *selection = (timer != 0).then_some((id, start.focus));
+    }
+    if timer == 0 {
+        error!(
+            error = %Error::from_thread(),
+            ?id,
+            "could not start the gesture timer; the press is dropped"
+        );
+        return None;
+    }
+    let point = screen_point(start.position, start.scale);
+    sink.send(AppEvent::Invoked {
+        gesture: id,
+        point,
+        screens: vec![screen_rect(start.area, start.scale)],
+    });
+    Some(Gesture {
+        id,
+        point,
+        focus: start.focus,
+        timer,
+    })
 }
 
 struct Gesture {
@@ -396,4 +453,64 @@ fn message_box(message: &str, icon: MESSAGEBOX_STYLE) {
     let message = HSTRING::from(message);
     // SAFETY: The text and title stay valid for the modal call.
     unsafe { MessageBoxW(None, &message, w!("Orbit"), MB_OK | icon) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const START: GestureStart = GestureStart {
+        focus: ExplorerFocus::fake(10, 11),
+        position: POINT { x: 500, y: 300 },
+        area: RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        },
+        scale: 1.0,
+    };
+
+    fn sink() -> (Sink, Receiver<AppEvent>) {
+        let (events, received) = mpsc::channel();
+        // SAFETY: Reads the id of the calling thread.
+        let thread = unsafe { GetCurrentThreadId() };
+        (Sink { events, thread }, received)
+    }
+
+    fn selected(selection: &Selection) -> Option<(GestureId, ExplorerFocus)> {
+        match selection.lock() {
+            Ok(selection) => *selection,
+            Err(_) => panic!("selection lock poisoned"),
+        }
+    }
+
+    #[test]
+    fn a_failed_timer_drops_only_that_press() {
+        let (sink, events) = sink();
+        let selection = Selection::default();
+        if let Ok(mut stale) = selection.lock() {
+            *stale = Some((GestureId(1), START.focus));
+        }
+
+        let failed = begin_gesture(GestureId(2), START, &selection, &sink, || 0);
+        assert!(failed.is_none());
+        assert!(events.try_recv().is_err(), "nothing is published");
+        assert!(selected(&selection).is_none(), "no stale selection");
+
+        // A timer id that was never set: dropping the gesture kills nothing.
+        let next = begin_gesture(GestureId(3), START, &selection, &sink, || 0x7fff);
+        assert!(
+            next.as_ref()
+                .is_some_and(|gesture| gesture.id == GestureId(3))
+        );
+        assert!(matches!(
+            events.try_recv(),
+            Ok(AppEvent::Invoked {
+                gesture: GestureId(3),
+                ..
+            })
+        ));
+        assert!(selected(&selection) == Some((GestureId(3), START.focus)));
+    }
 }

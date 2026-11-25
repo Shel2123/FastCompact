@@ -44,6 +44,12 @@ pub(super) struct ExplorerFocus {
 }
 
 impl ExplorerFocus {
+    /// A focus made of the given handles, for tests.
+    #[cfg(test)]
+    pub(super) const fn fake(window: isize, pane: isize) -> Self {
+        Self { window, pane }
+    }
+
     pub(super) fn capture() -> Option<Self> {
         // SAFETY: The buffer is initialized to the documented size.
         unsafe {

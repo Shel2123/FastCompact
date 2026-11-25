@@ -12,8 +12,12 @@ use windows::core::{Error, Result, w};
 use crate::cursor;
 
 pub(super) const TRAY_MESSAGE: u32 = WM_APP + 1;
-pub(super) const TRAY_RESTORE: u32 = WM_APP + 2;
 const EXIT: usize = 1;
+
+/// Whether the mouse event of a [`TRAY_MESSAGE`] opens the tray menu.
+pub(super) fn is_click(event: LPARAM) -> bool {
+    matches!(event.0 as u32, WM_RBUTTONUP | WM_LBUTTONUP)
+}
 
 pub(super) struct Tray(NOTIFYICONDATAW);
 
@@ -50,10 +54,9 @@ impl Tray {
         Ok(())
     }
 
-    pub(super) fn wants_exit(&self, event: LPARAM) -> Result<bool> {
-        if !matches!(event.0 as u32, WM_RBUTTONUP | WM_LBUTTONUP) {
-            return Ok(false);
-        }
+    /// Shows the tray menu at the pointer and tells whether Exit was
+    /// chosen. Runs a nested message loop until the menu closes.
+    pub(super) fn wants_exit(&self) -> Result<bool> {
         let point = cursor()?;
         // SAFETY: The menu is built and used on the window thread and
         // destroyed after TrackPopupMenu returns.

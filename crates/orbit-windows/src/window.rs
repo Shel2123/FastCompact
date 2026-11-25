@@ -1,6 +1,7 @@
 //! Non-activating windows for the radial menu and feedback.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::f64::consts::TAU;
 use std::rc::Rc;
 
 use orbit_app::catalog::MenuModel;
@@ -15,7 +16,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Error, Result, w};
 
-use crate::tray::TRAY_RESTORE;
+use crate::tray::{TRAY_MESSAGE, is_click};
 use crate::{Sink, cursor, work_area};
 
 const BACKGROUND: COLORREF = rgb(20, 25, 35);
@@ -41,6 +42,16 @@ struct WindowState {
     scale: f64,
     taskbar_created: u32,
     content: Content,
+    /// Tray requests seen by the window procedure, taken by the main loop.
+    /// The procedure only records them: it also runs inside nested message
+    /// loops such as the tray menu itself.
+    tray: TrayRequests,
+}
+
+#[derive(Default)]
+struct TrayRequests {
+    click: Cell<Option<LPARAM>>,
+    restore: Cell<bool>,
 }
 
 pub(super) struct Window {
@@ -70,6 +81,7 @@ impl Window {
             scale,
             taskbar_created,
             content: Content::None,
+            tray: TrayRequests::default(),
         }));
         // SAFETY: The boxed state remains at a stable address until after the
         // window is destroyed. This window and its state stay on this thread.
@@ -193,6 +205,19 @@ impl Popup {
         self.0.hide();
     }
 
+    /// The tray click and the icon restore request recorded since the last
+    /// call. The popup window owns the tray icon.
+    pub(super) fn take_tray_requests(&self) -> (Option<LPARAM>, bool) {
+        let state = self.0.state.borrow();
+        (state.tray.click.take(), state.tray.restore.take())
+    }
+
+    /// Forgets a tray click recorded while the tray menu was open: it
+    /// belonged to that menu.
+    pub(super) fn discard_tray_click(&self) {
+        self.0.state.borrow().tray.click.set(None);
+    }
+
     pub(super) fn display(&self, title: impl Into<String>, body: impl Into<String>, duration: u32) {
         let Ok(point) = cursor() else { return };
         let Some(area) = work_area(point) else { return };
@@ -305,6 +330,15 @@ unsafe extern "system" fn window_proc(
                 let _ = ShowWindow(window, SW_HIDE);
                 return LRESULT(0);
             }
+            TRAY_MESSAGE => {
+                if is_click(lparam)
+                    && let Some(state) = state.as_ref()
+                    && let Ok(state) = state.try_borrow()
+                {
+                    state.tray.click.set(Some(lparam));
+                }
+                return LRESULT(0);
+            }
             WM_CLOSE => return LRESULT(0),
             WM_NCDESTROY => {
                 SetWindowLongPtrW(window, GWLP_USERDATA, 0);
@@ -316,7 +350,7 @@ unsafe extern "system" fn window_proc(
                     && other != 0
                     && other == state.taskbar_created
                 {
-                    let _ = PostMessageW(Some(window), TRAY_RESTORE, WPARAM(0), LPARAM(0));
+                    state.tray.restore.set(true);
                 }
             }
         }
@@ -431,10 +465,13 @@ fn draw_menu(canvas: &Canvas, center: i32, model: &MenuModel, highlight: Highlig
             SetDCPenColor(canvas.dc, BORDER);
             let _ = Polygon(canvas.dc, &path);
         }
-        // The two sectors around twelve o'clock have adjacent horizontal labels.
-        let text_radius = match slot.item {
-            MenuItem::Action(ActionId::CopyPath | ActionId::Reveal) => 82.0,
-            _ => 70.0,
+        // Slots within one slot width of straight up sit side by side, so
+        // their horizontal labels need the wider, outer part of the ring.
+        let step = TAU / model.geometry.slots() as f64;
+        let text_radius = if model.geometry.slot_center(index).cos() > step.cos() {
+            82.0
+        } else {
+            70.0
         };
         let text_center = polar(model.geometry.slot_center(index), text_radius);
         let color = match slot.item {
