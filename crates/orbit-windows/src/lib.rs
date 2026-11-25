@@ -117,7 +117,8 @@ impl WindowsPlatform {
                         && held(VK_CONTROL)
                         && held(VK_MENU)
                         && let Some(focus) = ExplorerFocus::capture()
-                        && let Some(area) = work_area(message.pt)
+                        && let Ok(position) = cursor()
+                        && let Some(area) = work_area(position)
                     {
                         sequence = sequence.wrapping_add(1);
                         let id = GestureId(sequence);
@@ -131,7 +132,7 @@ impl WindowsPlatform {
                         if let Ok(mut selection) = self.selection.lock() {
                             *selection = Some((id, focus));
                         }
-                        let point = screen_point(message.pt, self.scale);
+                        let point = screen_point(position, self.scale);
                         active = Some(Gesture {
                             id,
                             point,

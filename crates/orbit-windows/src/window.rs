@@ -431,7 +431,12 @@ fn draw_menu(canvas: &Canvas, center: i32, model: &MenuModel, highlight: Highlig
             SetDCPenColor(canvas.dc, BORDER);
             let _ = Polygon(canvas.dc, &path);
         }
-        let text_center = polar(model.geometry.slot_center(index), 70.0);
+        // The two sectors around twelve o'clock have adjacent horizontal labels.
+        let text_radius = match slot.item {
+            MenuItem::Action(ActionId::CopyPath | ActionId::Reveal) => 82.0,
+            _ => 70.0,
+        };
+        let text_center = polar(model.geometry.slot_center(index), text_radius);
         let color = match slot.item {
             MenuItem::Cancel => CANCEL,
             _ if !slot.availability.is_available() => MUTED,
