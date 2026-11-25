@@ -206,8 +206,10 @@ mod tests {
             target.check_source(target.identity, resized),
             Err(SourceChanged::MetadataChanged)
         );
+        // 100 ns is the finest step SystemTime keeps on Windows; a smaller
+        // one rounds away there.
         let touched = FileVersion {
-            modified: target.version.modified + Duration::from_nanos(1),
+            modified: target.version.modified + Duration::from_nanos(100),
             ..target.version
         };
         assert_eq!(
