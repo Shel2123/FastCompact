@@ -1,7 +1,7 @@
 //! One Orbit at a time.
 //!
-//! Two instances would both register the hotkey and both run an event tap,
-//! so the second one stops at start. The guard is an advisory lock on a
+//! Two instances would both register the hotkey and both watch the
+//! gesture, so the second one stops at start. The guard is an advisory lock on a
 //! file; the system releases it when the process ends, however it ends.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -53,13 +53,6 @@ impl InstanceLock {
             Err(TryLockError::WouldBlock) => Err(LockError::AlreadyRunning),
             Err(TryLockError::Error(source)) => Err(io_error(source)),
         }
-    }
-
-    /// `~/Library/Application Support/Orbit/instance.lock`.
-    pub fn default_path() -> io::Result<PathBuf> {
-        let home = std::env::var_os("HOME")
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
-        Ok(PathBuf::from(home).join("Library/Application Support/Orbit/instance.lock"))
     }
 }
 

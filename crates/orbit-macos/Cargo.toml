@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-[dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 orbit-app.workspace = true
 orbit-domain.workspace = true
 orbit-runtime.workspace = true
@@ -118,8 +118,9 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Used by the stage 0 spike example and the main-thread test; the spike
-# features move to [dependencies] as the real adapters are written.
-[dev-dependencies]
+# features move to the regular dependencies above as the real adapters are
+# written.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
 block2.workspace = true
 global-hotkey.workspace = true
 objc2-app-kit = { workspace = true, features = [
@@ -217,16 +218,17 @@ tracing-subscriber.workspace = true
 
 [[example]]
 name = "spike"
-path = "examples/spike/main.rs"
+path = "examples/spike/entry.rs"
 
 [[example]]
 name = "spike_ui"
-path = "examples/spike_ui/main.rs"
+path = "examples/spike_ui/entry.rs"
 # Runs the contrast tests that live next to the spike code.
 test = true
 
 [[test]]
 name = "main_thread"
+path = "tests/main_thread/entry.rs"
 harness = false
 
 [lints]

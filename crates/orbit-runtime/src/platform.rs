@@ -7,6 +7,7 @@ use orbit_app::messages::AppEvent;
 use orbit_app::ports::{
     EventSink, Feedback, MenuView, OperationExecutor, ParametersView, Shell, TargetResolver,
 };
+use orbit_domain::action::ActionId;
 use orbit_domain::operation::FileNamePolicy;
 
 /// Takes the events of the controller on the main thread, one at a time.
@@ -68,6 +69,18 @@ pub trait Platform {
 
     /// Which names the platform refuses in the Rename form.
     fn file_name_policy(&self) -> FileNamePolicy;
+
+    /// Actions this platform can carry out. Every action by default.
+    ///
+    /// The controller shows the slots of the other actions as
+    /// [`UnavailableReason::UnsupportedPlatform`](orbit_domain::action::UnavailableReason::UnsupportedPlatform),
+    /// and choosing one of them has no effect of the action: nothing is
+    /// written to the clipboard, nothing is revealed in the file manager,
+    /// no parameters form opens and no job starts. The platform therefore
+    /// never sees a request for an action it left out.
+    fn supported_actions(&self) -> &'static [ActionId] {
+        &ActionId::ALL
+    }
 
     /// Hands over the views. Called once.
     fn views(&mut self) -> Views;

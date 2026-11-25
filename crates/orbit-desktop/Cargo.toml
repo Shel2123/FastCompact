@@ -11,11 +11,16 @@ name = "orbit"
 path = "src/main.rs"
 
 [dependencies]
-orbit-macos.workspace = true
 orbit-runtime.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+orbit-macos.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+orbit-windows.workspace = true
 
 [lints]
 workspace = true
