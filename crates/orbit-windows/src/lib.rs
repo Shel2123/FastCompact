@@ -1,4 +1,8 @@
 //! Native Win32 interface and Explorer integration for Orbit.
+//!
+//! [`WindowsPlatform`] is the [`Platform`] for `orbit_runtime::run`;
+//! [`show_error`] and [`show_notice`] report startup problems, since a
+//! release build has no console.
 
 #![cfg(windows)]
 
@@ -7,7 +11,6 @@ mod tray;
 mod window;
 
 use std::mem::size_of;
-use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -19,7 +22,7 @@ use orbit_app::ports::{EventSink, JobContext, OperationExecutor, ParametersView}
 use orbit_domain::action::ActionId;
 use orbit_domain::geometry::{ScreenPoint, ScreenRect};
 use orbit_domain::operation::FileNamePolicy;
-use orbit_runtime::{Handler, Platform, PlatformError, ResolverFactory, RuntimeConfig, Views};
+use orbit_runtime::{Handler, Platform, PlatformError, ResolverFactory, Views};
 use tracing::warn;
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -60,17 +63,36 @@ impl EventSink for Sink {
     }
 }
 
-struct WindowsPlatform {
+/// Orbit on Windows: Explorer as the file manager, a thread hotkey for the
+/// gesture, Win32 windows for the menu and feedback, and a notification
+/// area icon to exit.
+///
+/// Must be made, run and dropped on one thread, which becomes the UI
+/// thread.
+pub struct WindowsPlatform {
     menu: Option<RadialMenu>,
     popup: Popup,
     selection: Selection,
     sink: Sink,
     events: Receiver<AppEvent>,
     scale: f64,
+    // Fields drop in order: COM stays initialized until the windows and the
+    // shell objects above are gone.
+    _com: Apartment,
 }
 
 impl WindowsPlatform {
-    fn new() -> Result<Self> {
+    /// Initializes COM for this thread and creates the hidden windows.
+    ///
+    /// # Errors
+    ///
+    /// When COM cannot be initialized or a window cannot be created.
+    pub fn new() -> std::result::Result<Self, PlatformError> {
+        let com = Apartment::initialize()?;
+        Ok(Self::with_apartment(com)?)
+    }
+
+    fn with_apartment(com: Apartment) -> Result<Self> {
         // SAFETY: Startup runs on the thread that will own both windows.
         let (instance, thread, scale) = unsafe {
             let _ = SetProcessDPIAware();
@@ -96,6 +118,7 @@ impl WindowsPlatform {
             sink,
             events,
             scale,
+            _com: com,
         })
     }
 
@@ -359,18 +382,18 @@ fn screen_rect(area: RECT, scale: f64) -> ScreenRect {
     )
 }
 
-/// Starts Orbit and runs its Win32 message loop on the calling thread.
-pub fn run_app() -> ExitCode {
-    let result = (|| -> std::result::Result<(), PlatformError> {
-        let _com = Apartment::initialize()?;
-        orbit_runtime::run(WindowsPlatform::new()?, RuntimeConfig::default())?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        let message = HSTRING::from(error.to_string());
-        // SAFETY: The error text and title are valid for the modal Win32 call.
-        unsafe { MessageBoxW(None, &message, w!("Orbit"), MB_OK | MB_ICONERROR) };
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
+/// Shows `message` in a modal error box.
+pub fn show_error(message: &str) {
+    message_box(message, MB_ICONERROR);
+}
+
+/// Shows `message` in a modal information box.
+pub fn show_notice(message: &str) {
+    message_box(message, MB_ICONINFORMATION);
+}
+
+fn message_box(message: &str, icon: MESSAGEBOX_STYLE) {
+    let message = HSTRING::from(message);
+    // SAFETY: The text and title stay valid for the modal call.
+    unsafe { MessageBoxW(None, &message, w!("Orbit"), MB_OK | icon) };
 }
