@@ -11,7 +11,7 @@
 
 use std::mem;
 
-use orbit_domain::action::{ActionId, MenuItem};
+use orbit_domain::action::{ActionId, Availability, MenuItem, UnavailableReason};
 use orbit_domain::geometry::{Hit, MenuGeometry, ScreenPoint, ScreenRect, place_menu};
 use orbit_domain::operation::{FileName, FileNamePolicy, OperationSpec, ResizeBound};
 use orbit_domain::target::{FileTarget, PixelSize};
@@ -31,6 +31,7 @@ pub struct AppController {
     geometry: MenuGeometry,
     next_job: JobId,
     names: FileNamePolicy,
+    supported_actions: &'static [ActionId],
 }
 
 impl AppController {
@@ -42,7 +43,13 @@ impl AppController {
             geometry: MenuGeometry::standard(),
             next_job: JobId::FIRST,
             names,
+            supported_actions: &ActionId::ALL,
         }
+    }
+
+    /// Restricts which actions may be selected on this platform.
+    pub fn set_supported_actions(&mut self, actions: &'static [ActionId]) {
+        self.supported_actions = actions;
     }
 
     /// Current state, for adapters that need to inspect it and for tests.
@@ -170,7 +177,15 @@ impl AppController {
             return;
         };
         let title = name.to_string_lossy().into_owned();
-        let slots = menu_slots(&target.facts);
+        let mut slots = menu_slots(&target.facts);
+        for slot in &mut slots {
+            if let MenuItem::Action(action) = slot.item
+                && !self.supported_actions.contains(&action)
+            {
+                slot.availability =
+                    Availability::Unavailable(UnavailableReason::UnsupportedPlatform);
+            }
+        }
         let highlight = cursor.map_or(Highlight::None, |cursor| {
             highlight_at(&self.geometry, &slots, center, invoke, cursor)
         });
@@ -956,6 +971,28 @@ mod tests {
         );
         assert_eq!(h.release(A, point), vec![Effect::HideMenu]);
         assert_eq!(h.menu(), &MenuState::Closed);
+    }
+
+    #[test]
+    fn platform_unsupported_action_stays_inactive_for_a_supported_file_type() {
+        let mut h = Harness::new();
+        h.controller.set_supported_actions(&[ActionId::CopyPath]);
+        let center = h.open(A, MIDDLE, plain("/tmp/a"));
+        let zip = slot_of(ActionId::ArchiveZip);
+        let point = slot_point(center, zip);
+        assert_eq!(
+            h.move_to(A, point),
+            vec![Effect::Highlight(Highlight::Inactive(zip))]
+        );
+        assert_eq!(h.release(A, point), vec![Effect::HideMenu]);
+        assert!(h.controller.state().jobs.is_empty());
+        assert_eq!(
+            h.choose(B, plain("/tmp/a"), ActionId::CopyPath),
+            vec![
+                Effect::HideMenu,
+                Effect::WriteClipboard(PathBuf::from("/tmp/a"))
+            ]
+        );
     }
 
     #[test]

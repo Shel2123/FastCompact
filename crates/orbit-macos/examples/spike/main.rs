@@ -6,12 +6,7 @@
 //! bundle with `scripts/bundle-spike.sh`; results go to
 //! `~/Library/Logs/Orbit/spike.log`. See `docs/spike-0.md` for the scenarios.
 
-mod applescript;
-mod ax;
-mod panel;
-mod secure;
-mod selection;
-mod tap;
+use crate::{applescript, ax, panel, secure, selection, tap};
 
 use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
@@ -52,7 +47,7 @@ const PULSE_DELAY: Duration = Duration::from_millis(200);
 /// Secure Input of a pulse is turned off after this at the latest.
 const PULSE_MAX: Duration = Duration::from_secs(3);
 
-fn main() {
+pub(super) fn launch() {
     if std::env::args().nth(1).as_deref() == Some(secure::HELPER_ARG) {
         secure::helper_main();
         return;

@@ -89,6 +89,7 @@ pub enum RunError {
 /// [`RunError::Start`] when the runtime cannot start, [`RunError::Platform`]
 /// when the platform fails.
 pub fn run<P: Platform>(mut platform: P, config: RuntimeConfig) -> Result<(), RunError> {
+    let actions = platform.supported_actions();
     let mut runtime = Runtime::new(
         platform.sink(),
         platform.resolver(),
@@ -97,6 +98,7 @@ pub fn run<P: Platform>(mut platform: P, config: RuntimeConfig) -> Result<(), Ru
         platform.views(),
         config.jobs,
     )?;
+    runtime.controller.set_supported_actions(actions);
     platform
         .run(Box::new(move |event| runtime.handle(event)))
         .map_err(RunError::Platform)

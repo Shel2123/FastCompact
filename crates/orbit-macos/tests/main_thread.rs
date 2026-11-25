@@ -33,7 +33,7 @@ const B_BASE: u64 = 200_000;
 const EARLY_BASE: u64 = 300_000;
 const EARLY: u64 = 20;
 
-fn main() -> ExitCode {
+pub(super) fn launch() -> ExitCode {
     match run() {
         Ok(()) => {
             println!("test main_thread ... ok");

@@ -13,6 +13,7 @@ orbit-domain = { path = "crates/orbit-domain" }
 orbit-app = { path = "crates/orbit-app" }
 orbit-runtime = { path = "crates/orbit-runtime" }
 orbit-macos = { path = "crates/orbit-macos" }
+orbit-windows = { path = "crates/orbit-windows" }
 
 block2 = "0.6.2"
 crossbeam-channel = "0.5.17"

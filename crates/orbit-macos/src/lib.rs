@@ -1,5 +1,7 @@
 //! AppKit UI and macOS system adapters for Orbit.
 
+#![cfg(target_os = "macos")]
+
 pub mod debug;
 pub mod mac_platform;
 pub mod main_thread;

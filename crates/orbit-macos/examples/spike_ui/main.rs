@@ -13,7 +13,7 @@
 //! - `ORBIT_SPIKE_UI_UNAVAILABLE`: comma-separated slots drawn unavailable
 //! - `ORBIT_SPIKE_UI_DUMP`: `1` logs the layer tree once at start
 
-mod view;
+use crate::view;
 
 use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
@@ -40,7 +40,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use view::{Appearance, Background, Config, MenuPanel};
 
-fn main() {
+pub(super) fn launch() {
     if let Err(err) = init_logging() {
         warn!(%err, "file logging unavailable; logging to stderr only");
     }
