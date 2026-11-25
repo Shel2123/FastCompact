@@ -300,6 +300,7 @@ dependencies = [
  "block2",
  "dispatch2",
  "global-hotkey",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-application-services",
