@@ -10,6 +10,7 @@ mod explorer;
 mod tray;
 mod window;
 
+use std::cell::Cell;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -23,14 +24,19 @@ use orbit_domain::action::ActionId;
 use orbit_domain::geometry::{ScreenPoint, ScreenRect};
 use orbit_domain::operation::FileNamePolicy;
 use orbit_runtime::{Handler, Platform, PlatformError, ResolverFactory, Views};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::HiDpi::GetDpiForSystem;
+use windows::Win32::UI::HiDpi::{
+    AreDpiAwarenessContextsEqual, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    DPI_AWARENESS_PER_MONITOR_AWARE, DPI_AWARENESS_SYSTEM_AWARE, DPI_AWARENESS_UNAWARE,
+    GetAwarenessFromDpiAwarenessContext, GetDpiForMonitor, GetThreadDpiAwarenessContext,
+    MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
     VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_SPACE,
@@ -75,7 +81,10 @@ pub struct WindowsPlatform {
     selection: Selection,
     sink: Sink,
     events: Receiver<AppEvent>,
-    scale: f64,
+    /// Scale of the current gesture, shared with the menu window.
+    gesture_scale: Rc<Cell<f64>>,
+    /// Set by the menu window when its scale changed while shown.
+    menu_dpi_lost: Rc<Cell<bool>>,
     // Fields drop in order: COM stays initialized until the windows and the
     // shell objects above are gone.
     _com: Apartment,
@@ -93,15 +102,11 @@ impl WindowsPlatform {
     }
 
     fn with_apartment(com: Apartment) -> Result<Self> {
+        ensure_per_monitor_dpi();
         // SAFETY: Startup runs on the thread that will own both windows.
-        let (instance, thread, scale) = unsafe {
-            let _ = SetProcessDPIAware();
+        let (instance, thread) = unsafe {
             let _ = PeekMessageW(&mut MSG::default(), None, 0, 0, PM_NOREMOVE);
-            (
-                HINSTANCE(GetModuleHandleW(None)?.0),
-                GetCurrentThreadId(),
-                f64::from(GetDpiForSystem().max(96)) / 96.0,
-            )
+            (HINSTANCE(GetModuleHandleW(None)?.0), GetCurrentThreadId())
         };
         let (sender, events) = mpsc::channel();
         let sink = Sink {
@@ -109,15 +114,19 @@ impl WindowsPlatform {
             thread,
         };
         Window::register(instance)?;
-        let menu = RadialMenu(Window::new(instance, scale)?, sink.clone());
-        let popup = Popup(Rc::new(Window::new(instance, scale)?));
+        let gesture_scale = Rc::new(Cell::new(1.0));
+        let menu_window = Window::new(instance)?;
+        let menu_dpi_lost = menu_window.dpi_lost();
+        let menu = RadialMenu(menu_window, sink.clone(), Rc::clone(&gesture_scale));
+        let popup = Popup(Rc::new(Window::new(instance)?));
         Ok(Self {
             menu: Some(menu),
             popup,
             selection: Selection::default(),
             sink,
             events,
-            scale,
+            gesture_scale,
+            menu_dpi_lost,
             _com: com,
         })
     }
@@ -148,7 +157,10 @@ impl WindowsPlatform {
                             focus,
                             position,
                             area,
-                            scale: self.scale,
+                            // Fixed for the whole gesture, so every point of
+                            // it is in one coordinate space, even across
+                            // monitors with different scales.
+                            scale: monitor_scale(position),
                         };
                         // A thread timer runs only while the hotkey is held.
                         // SAFETY: The UI thread owns the timer and receives its messages.
@@ -161,6 +173,7 @@ impl WindowsPlatform {
                             set_timer,
                         );
                         if active.is_some() {
+                            self.gesture_scale.set(start.scale);
                             self.popup.hide();
                         }
                     }
@@ -172,7 +185,7 @@ impl WindowsPlatform {
                             .is_some_and(|gesture| gesture.timer == message.wParam.0) =>
                 {
                     if let Some(gesture) = active.as_mut()
-                        && !gesture.poll(&self.sink, self.scale)
+                        && !gesture.poll(&self.sink)
                     {
                         active = None;
                     }
@@ -186,6 +199,12 @@ impl WindowsPlatform {
                 }
             }
             self.drain(&mut handler);
+            if self.menu_dpi_lost.take()
+                && let Some(gesture) = active.take()
+            {
+                gesture.cancel(&self.sink);
+                self.drain(&mut handler);
+            }
             if self.serve_tray(tray, &mut active, &mut handler) {
                 return Ok(());
             }
@@ -342,6 +361,7 @@ fn begin_gesture(
         id,
         point,
         focus: start.focus,
+        scale: start.scale,
         timer,
     })
 }
@@ -350,6 +370,7 @@ struct Gesture {
     id: GestureId,
     point: ScreenPoint,
     focus: ExplorerFocus,
+    scale: f64,
     timer: usize,
 }
 
@@ -363,12 +384,12 @@ impl Gesture {
         });
     }
 
-    fn poll(&mut self, sink: &Sink, scale: f64) -> bool {
+    fn poll(&mut self, sink: &Sink) -> bool {
         let Ok(point) = cursor() else {
             self.cancel(sink);
             return false;
         };
-        let point = screen_point(point, scale);
+        let point = screen_point(point, self.scale);
         if held(VK_ESCAPE) || ExplorerFocus::capture() != Some(self.focus) {
             self.cancel(sink);
             return false;
@@ -423,6 +444,71 @@ fn work_area(point: POINT) -> Option<RECT> {
         GetMonitorInfoW(monitor, &mut info)
             .as_bool()
             .then_some(info.rcWork)
+    }
+}
+
+/// Physical pixels per Orbit unit on the monitor nearest to `point`, from
+/// its effective DPI. The windows are created at (0, 0), so the DPI of a
+/// window would be that of the first monitor until it is moved; the
+/// monitor of the target point is asked instead.
+fn monitor_scale(point: POINT) -> f64 {
+    let (mut x, mut y) = (0, 0);
+    // SAFETY: x and y are writable for the call.
+    let dpi = unsafe {
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y)
+    };
+    match dpi {
+        Ok(()) if x > 0 => f64::from(x) / 96.0,
+        _ => 1.0,
+    }
+}
+
+/// Makes the process Per-Monitor v2 DPI aware unless the manifest of
+/// orbit.exe already did, and logs the mode in effect.
+fn ensure_per_monitor_dpi() {
+    // SAFETY: These calls take and return DPI awareness handles by value.
+    let is_v2 = || unsafe {
+        AreDpiAwarenessContextsEqual(
+            GetThreadDpiAwarenessContext(),
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        )
+        .as_bool()
+    };
+    if !is_v2() {
+        // SAFETY: Called before any window of this process exists.
+        let set =
+            unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        // ERROR_ACCESS_DENIED only means the mode was set before (by a
+        // manifest or an earlier call); the mode in effect decides.
+        if let Err(error) = set
+            && !is_v2()
+        {
+            warn!(
+                %error,
+                mode = dpi_mode(),
+                "not Per-Monitor v2 DPI aware; Orbit may be blurry or misplaced on monitors with another scale"
+            );
+        }
+    }
+    info!(mode = dpi_mode(), "DPI awareness");
+}
+
+fn dpi_mode() -> &'static str {
+    // SAFETY: These calls take and return DPI awareness handles by value.
+    unsafe {
+        let context = GetThreadDpiAwarenessContext();
+        if AreDpiAwarenessContextsEqual(context, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+            .as_bool()
+        {
+            return "per-monitor v2";
+        }
+        match GetAwarenessFromDpiAwarenessContext(context) {
+            DPI_AWARENESS_PER_MONITOR_AWARE => "per-monitor v1",
+            DPI_AWARENESS_SYSTEM_AWARE => "system",
+            DPI_AWARENESS_UNAWARE => "unaware",
+            _ => "unknown",
+        }
     }
 }
 

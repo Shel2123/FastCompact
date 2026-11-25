@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Error, Result, w};
 
 use crate::tray::{TRAY_MESSAGE, is_click};
-use crate::{Sink, cursor, work_area};
+use crate::{Sink, cursor, monitor_scale, work_area};
 
 const BACKGROUND: COLORREF = rgb(20, 25, 35);
 const SECTOR: COLORREF = rgb(34, 43, 57);
@@ -39,7 +39,14 @@ enum Content {
 }
 
 struct WindowState {
+    /// Pixels per Orbit unit for the current content, set on every show.
     scale: f64,
+    /// True while our own SetWindowPos runs: the WM_DPICHANGED it causes
+    /// is the expected move to the target monitor.
+    positioning: Cell<bool>,
+    /// Set when the scale of the shown window changed under it. Shared
+    /// with the message loop for the menu.
+    dpi_lost: Rc<Cell<bool>>,
     taskbar_created: u32,
     content: Content,
     /// Tray requests seen by the window procedure, taken by the main loop.
@@ -74,11 +81,13 @@ impl Window {
         Ok(())
     }
 
-    pub(super) fn new(instance: HINSTANCE, scale: f64) -> Result<Self> {
+    pub(super) fn new(instance: HINSTANCE) -> Result<Self> {
         // SAFETY: TaskbarCreated is a stable shell broadcast message name.
         let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
         let state = Box::new(RefCell::new(WindowState {
-            scale,
+            scale: 1.0,
+            positioning: Cell::new(false),
+            dpi_lost: Rc::default(),
             taskbar_created,
             content: Content::None,
             tray: TrayRequests::default(),
@@ -111,9 +120,17 @@ impl Window {
         }
     }
 
-    fn show(&self, bounds: RECT) -> Result<()> {
-        // SAFETY: All coordinates are in the same desktop coordinate space.
-        unsafe {
+    /// The flag the window sets when its scale changes while it is shown.
+    pub(super) fn dpi_lost(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.state.borrow().dpi_lost)
+    }
+
+    /// Shows the window at `bounds`, in physical pixels, drawn at `scale`.
+    fn show(&self, bounds: RECT, scale: f64) -> Result<()> {
+        self.state.borrow_mut().scale = scale;
+        self.state.borrow().positioning.set(true);
+        // SAFETY: All coordinates are in the same physical desktop space.
+        let placed = unsafe {
             SetWindowPos(
                 self.handle,
                 Some(HWND_TOPMOST),
@@ -122,7 +139,12 @@ impl Window {
                 bounds.right - bounds.left,
                 bounds.bottom - bounds.top,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            )?;
+            )
+        };
+        self.state.borrow().positioning.set(false);
+        placed?;
+        // SAFETY: The update is requested for our own window.
+        unsafe {
             let _ = InvalidateRect(Some(self.handle), None, false);
         }
         Ok(())
@@ -139,7 +161,9 @@ impl Drop for Window {
     }
 }
 
-pub(super) struct RadialMenu(pub Window, pub Sink);
+/// The menu window, the sink to cancel a gesture it cannot show, and the
+/// scale of the current gesture, fixed by the message loop at the press.
+pub(super) struct RadialMenu(pub Window, pub Sink, pub Rc<Cell<f64>>);
 
 impl MenuView for RadialMenu {
     fn present(&mut self, model: &MenuModel) {
@@ -170,7 +194,7 @@ impl MenuView for RadialMenu {
 
 impl RadialMenu {
     fn show(&self, model: &MenuModel) -> Result<()> {
-        let scale = self.0.state.borrow().scale;
+        let scale = self.2.get();
         let radius = pixels(model.geometry.outer_radius(), scale);
         let diameter = 2 * radius;
         // SAFETY: The region is ours until SetWindowRgn succeeds.
@@ -188,12 +212,15 @@ impl RadialMenu {
         self.0.state.borrow_mut().content = Content::Menu(model.clone(), Highlight::None);
         let x = pixels(model.center.x, scale);
         let y = pixels(-model.center.y, scale);
-        self.0.show(RECT {
-            left: x - radius,
-            top: y - radius,
-            right: x + radius,
-            bottom: y + radius,
-        })
+        self.0.show(
+            RECT {
+                left: x - radius,
+                top: y - radius,
+                right: x + radius,
+                bottom: y + radius,
+            },
+            scale,
+        )
     }
 }
 
@@ -221,7 +248,7 @@ impl Popup {
     pub(super) fn display(&self, title: impl Into<String>, body: impl Into<String>, duration: u32) {
         let Ok(point) = cursor() else { return };
         let Some(area) = work_area(point) else { return };
-        let scale = self.0.state.borrow().scale;
+        let scale = monitor_scale(point);
         let width = pixels(360.0, scale).min(area.right - area.left);
         let height = pixels(118.0, scale).min(area.bottom - area.top);
         let offset = pixels(16.0, scale);
@@ -238,12 +265,13 @@ impl Popup {
                 return;
             }
         }
-        if let Err(error) = self.0.show(RECT {
+        let bounds = RECT {
             left,
             top,
             right: left + width,
             bottom: top + height,
-        }) {
+        };
+        if let Err(error) = self.0.show(bounds, scale) {
             warn!(%error, "could not show feedback");
         }
     }
@@ -336,6 +364,22 @@ unsafe extern "system" fn window_proc(
                     && let Ok(state) = state.try_borrow()
                 {
                     state.tray.click.set(Some(lparam));
+                }
+                return LRESULT(0);
+            }
+            WM_DPICHANGED => {
+                // A shown window whose scale changed under it (display
+                // settings, a monitor added or removed) has the layout of the
+                // old scale, so it closes; for the menu the loop then cancels
+                // the gesture. The suggested rectangle is not used.
+                if let Some(state) = state.as_ref()
+                    && let Ok(state) = state.try_borrow()
+                    && !state.positioning.get()
+                    && IsWindowVisible(window).as_bool()
+                {
+                    let _ = KillTimer(Some(window), DISMISS);
+                    let _ = ShowWindow(window, SW_HIDE);
+                    state.dpi_lost.set(true);
                 }
                 return LRESULT(0);
             }
