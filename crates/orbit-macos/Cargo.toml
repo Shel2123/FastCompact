@@ -215,11 +215,17 @@ objc2-quartz-core = { workspace = true, features = [
     "CATransaction",
     "CATransform3D",
 ] }
+tempfile.workspace = true
 tracing-subscriber.workspace = true
+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
 
 [[example]]
 name = "spike"
 path = "examples/spike/entry.rs"
+
+[[example]]
+name = "spike_publish"
+path = "examples/spike_publish.rs"
 
 [[example]]
 name = "spike_ui"
