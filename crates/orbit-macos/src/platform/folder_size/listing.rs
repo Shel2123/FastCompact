@@ -52,7 +52,7 @@ impl Kind {
         }
     }
 
-    /// Whether the length and link count of such an entry matter.
+    /// Whether the size on the disk and link count of such an entry matter.
     fn has_data(self) -> bool {
         matches!(self, Self::File | Self::Link)
     }

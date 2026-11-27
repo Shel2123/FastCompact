@@ -51,7 +51,7 @@ const SF_DATALESS: u32 = 0x4000_0000;
 /// The result of a whole walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FolderSize {
-    /// The sum of the lengths, in bytes.
+    /// The space the files take on the disk, in bytes.
     pub bytes: u64,
     /// Folders and entries that could not be read; their size is missing,
     /// so `bytes` is a lower bound when this is not zero.
