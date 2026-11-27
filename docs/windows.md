@@ -9,11 +9,12 @@ cargo build --locked --release -p orbit-desktop
 
 1. Select one file or folder in File Explorer.
 2. Hold Ctrl+Alt+Space to open the radial menu at the pointer.
-3. Move over Copy path, Info, or Reveal and release the shortcut. Info shows
-   the path, item type and file size. Reveal opens the parent folder and
-   selects the item.
-4. Press Esc, release in the center, or release outside the ring to dismiss
-   the menu. Use the Orbit tray icon to exit the app.
+3. Move toward Copy path, Info, or Reveal and release the shortcut. The
+   direction from the menu center chooses, so the pointer may go past the
+   ring. Info shows the path, item type and file size. Reveal opens the
+   parent folder and selects the item.
+4. Press Esc, release in the center, or release toward Cancel (straight
+   down) to dismiss the menu. Use the Orbit tray icon to exit the app.
 
 Rename, ZIP, resize, and image conversion are dimmed on Windows and do
 nothing when chosen. The menu works in Explorer's file list.
@@ -74,3 +75,9 @@ Run on Windows:
    selection, and a selection near a screen edge. Check that the menu
    leaves Explorer focused, dimmed actions do nothing, Esc cancels the
    gesture, and Copy path pastes the complete path.
+8. Move the pointer far past the ring toward Copy path: Copy path is
+   highlighted and the release copies the path. Far straight down, Cancel is
+   highlighted and the release does nothing. Open the menu at a screen
+   corner and move the pointer a little: the slot highlighted is the one the
+   pointer points to from the visible menu center, and the release runs that
+   slot.

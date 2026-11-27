@@ -73,17 +73,12 @@ impl Drop for SizeJob {
 /// The body of the counting thread.
 fn count(path: &Path, cancel: Arc<AtomicBool>, target: Arc<Target>) {
     let started = Instant::now();
-    let mut next = started + UPDATE_EVERY;
-    let walk = folder_size(path, &cancel, |bytes| {
-        let now = Instant::now();
-        if now >= next {
-            next = now + UPDATE_EVERY;
-            deliver(
-                Arc::clone(&target),
-                Arc::clone(&cancel),
-                SizeState::Counting(Some(bytes)),
-            );
-        }
+    let walk = folder_size(path, &cancel, UPDATE_EVERY, |bytes| {
+        deliver(
+            Arc::clone(&target),
+            Arc::clone(&cancel),
+            SizeState::Counting(Some(bytes)),
+        );
     });
     match walk {
         Walk::Done(size) => {

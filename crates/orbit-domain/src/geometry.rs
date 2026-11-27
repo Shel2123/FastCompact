@@ -120,7 +120,7 @@ pub enum Hit {
     Neutral,
     /// The slot with this index.
     Slot(usize),
-    /// Nothing: the cursor is beyond the menu.
+    /// Nothing: a point is not finite.
     Outside,
 }
 
@@ -247,8 +247,12 @@ impl MenuGeometry {
     /// Until the cursor moves at least [`MenuGeometry::move_threshold`] away
     /// from `invoke`, nothing is chosen, even when the menu was shifted away
     /// from a screen edge and `invoke` lies over a slot (I3). After that the
-    /// position relative to `center` decides. The result depends only on the
-    /// current points, so the highlight and the final choice always agree.
+    /// direction from `center` decides, at any distance: the cursor may go
+    /// past the ring. `center` is the visible center of the menu, also when
+    /// the menu was shifted away from a screen edge, so near a corner a short
+    /// move chooses the slot the cursor points to from the shifted center.
+    /// The result depends only on the current points, so the highlight and
+    /// the final choice always agree.
     #[must_use]
     pub fn hit(&self, center: ScreenPoint, invoke: ScreenPoint, cursor: ScreenPoint) -> Hit {
         if !(center.is_finite() && invoke.is_finite() && cursor.is_finite()) {
@@ -258,11 +262,8 @@ impl MenuGeometry {
             return Hit::Neutral;
         }
         let offset = cursor.relative_to(center);
-        let distance = offset.length();
-        if distance < self.neutral_radius {
+        if offset.length() < self.neutral_radius {
             Hit::Neutral
-        } else if distance > self.outer_radius {
-            Hit::Outside
         } else {
             Hit::Slot(self.slot_at(offset.angle()))
         }
@@ -327,7 +328,7 @@ fn clamp_axis(value: f64, min: f64, max: f64, radius: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{CANCEL_SLOT, MENU_LAYOUT};
+    use crate::action::{ActionId, CANCEL_SLOT, MENU_LAYOUT, MenuItem};
 
     const PRIMARY: ScreenRect = ScreenRect::new(0.0, 0.0, 1440.0, 875.0);
     /// To the left of the primary display, lower and larger.
@@ -407,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn corner_invocation_outside_the_shifted_ring() {
+    fn corner_invocation_chooses_by_direction_from_the_shifted_center() {
         let geometry = standard();
         let invoke = ScreenPoint::new(1.0, 1.0);
         let center = place(invoke);
@@ -416,9 +417,14 @@ mod tests {
 
         // Not moved: neutral, although the point is beyond the ring.
         assert_eq!(geometry.hit(center, invoke, invoke), Hit::Neutral);
-        // Moved past the threshold but still beyond the ring.
+        // A short move past the threshold, still beyond the ring: the
+        // direction from the shifted center, down and to the left, chooses.
+        let resize = MENU_LAYOUT
+            .iter()
+            .position(|item| *item == MenuItem::Action(ActionId::ResizeImage))
+            .unwrap_or_else(|| panic!("no resize slot"));
         let moved = ScreenPoint::new(invoke.x + 8.0, invoke.y);
-        assert_eq!(geometry.hit(center, invoke, moved), Hit::Outside);
+        assert_eq!(geometry.hit(center, invoke, moved), Hit::Slot(resize));
         // Into the ring, straight below the center: Cancel.
         let below = polar(center, PI, 60.0);
         assert_eq!(geometry.hit(center, invoke, below), Hit::Slot(CANCEL_SLOT));
@@ -432,6 +438,21 @@ mod tests {
         let middle = f64::midpoint(geometry.neutral_radius(), geometry.outer_radius());
         for slot in 0..geometry.slots() {
             let cursor = polar(center, geometry.slot_center(slot), middle);
+            assert_eq!(
+                geometry.hit(center, center, cursor),
+                Hit::Slot(slot),
+                "slot {slot}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_slot_direction_hits_its_slot_beyond_the_ring() {
+        let geometry = standard();
+        let center = ScreenPoint::new(500.0, 500.0);
+        let far = 3.0 * geometry.outer_radius();
+        for slot in 0..geometry.slots() {
+            let cursor = polar(center, geometry.slot_center(slot), far);
             assert_eq!(
                 geometry.hit(center, center, cursor),
                 Hit::Slot(slot),
@@ -489,7 +510,8 @@ mod tests {
             (29.999, Hit::Neutral),
             (30.0, Hit::Slot(0)),
             (100.0, Hit::Slot(0)),
-            (100.001, Hit::Outside),
+            (100.001, Hit::Slot(0)),
+            (10_000.0, Hit::Slot(0)),
         ];
         for (distance, expected) in cases {
             let cursor = ScreenPoint::new(0.0, distance);

@@ -271,8 +271,8 @@ impl AppController {
         }
     }
 
-    /// Runs what the slot under the release point does. Neutral zone,
-    /// outside, Cancel and unavailable actions do nothing.
+    /// Runs what the slot in the direction of the release point does.
+    /// Neutral zone, Cancel and unavailable actions do nothing.
     fn choose(
         &mut self,
         gesture: GestureId,
@@ -628,8 +628,16 @@ mod tests {
 
     /// A point in the middle of the ring over `slot`.
     fn slot_point(center: ScreenPoint, slot: usize) -> ScreenPoint {
+        slot_point_at(center, slot, 70.0)
+    }
+
+    /// A point `distance` away from `center` in the direction of `slot`.
+    fn slot_point_at(center: ScreenPoint, slot: usize, distance: f64) -> ScreenPoint {
         let angle = MenuGeometry::standard().slot_center(slot);
-        ScreenPoint::new(center.x + 70.0 * angle.sin(), center.y + 70.0 * angle.cos())
+        ScreenPoint::new(
+            center.x + distance * angle.sin(),
+            center.y + distance * angle.cos(),
+        )
     }
 
     fn started(effects: &[Effect]) -> &JobSpec {
@@ -943,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_slot_neutral_zone_and_outside_do_nothing() {
+    fn cancel_and_neutral_zone_do_nothing() {
         let mut h = Harness::new();
         let center = h.open(A, MIDDLE, plain("/tmp/a"));
         let cancel = slot_point(center, CANCEL_SLOT);
@@ -953,15 +961,54 @@ mod tests {
         );
         assert_eq!(h.release(A, cancel), vec![Effect::HideMenu]);
 
-        h.open(B, MIDDLE, plain("/tmp/a"));
-        let neutral = ScreenPoint::new(MIDDLE.x + 15.0, MIDDLE.y);
-        assert_eq!(h.release(B, neutral), vec![Effect::HideMenu]);
+        // Far beyond the ring, straight down: still Cancel.
+        let center = h.open(B, MIDDLE, plain("/tmp/a"));
+        let far_cancel = slot_point_at(center, CANCEL_SLOT, 300.0);
+        assert_eq!(
+            h.move_to(B, far_cancel),
+            vec![Effect::Highlight(Highlight::Active(CANCEL_SLOT))]
+        );
+        assert_eq!(h.release(B, far_cancel), vec![Effect::HideMenu]);
 
+        // Back to the center from a highlighted action.
         let c = GestureId(3);
-        h.open(c, MIDDLE, plain("/tmp/a"));
-        let outside = ScreenPoint::new(MIDDLE.x + 300.0, MIDDLE.y);
-        assert_eq!(h.release(c, outside), vec![Effect::HideMenu]);
+        let center = h.open(c, MIDDLE, plain("/tmp/a"));
+        let copy = slot_of(ActionId::CopyPath);
+        assert_eq!(
+            h.move_to(c, slot_point(center, copy)),
+            vec![Effect::Highlight(Highlight::Active(copy))]
+        );
+        assert_eq!(
+            h.move_to(c, center),
+            vec![Effect::Highlight(Highlight::None)]
+        );
+        assert_eq!(h.release(c, center), vec![Effect::HideMenu]);
+
+        // Released in the neutral zone without visiting a slot.
+        let d = GestureId(4);
+        h.open(d, MIDDLE, plain("/tmp/a"));
+        let neutral = ScreenPoint::new(MIDDLE.x + 15.0, MIDDLE.y);
+        assert_eq!(h.release(d, neutral), vec![Effect::HideMenu]);
         assert!(h.controller.state().jobs.is_empty());
+    }
+
+    #[test]
+    fn far_release_runs_the_slot_in_that_direction() {
+        let mut h = Harness::new();
+        let center = h.open(A, MIDDLE, plain("/tmp/a"));
+        let copy = slot_of(ActionId::CopyPath);
+        let far = slot_point_at(center, copy, 300.0);
+        assert_eq!(
+            h.move_to(A, far),
+            vec![Effect::Highlight(Highlight::Active(copy))]
+        );
+        assert_eq!(
+            h.release(A, far),
+            vec![
+                Effect::HideMenu,
+                Effect::WriteClipboard(PathBuf::from("/tmp/a"))
+            ]
+        );
     }
 
     #[test]
