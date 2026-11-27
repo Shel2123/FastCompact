@@ -267,7 +267,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "orbit-app"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "orbit-domain",
  "thiserror",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-desktop"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "orbit-macos",
  "orbit-runtime",
@@ -288,14 +288,14 @@ dependencies = [
 
 [[package]]
 name = "orbit-domain"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "orbit-macos"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "block2",
  "dispatch2",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-runtime"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "crossbeam-channel",
  "orbit-app",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-windows"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "orbit-app",
  "orbit-domain",
