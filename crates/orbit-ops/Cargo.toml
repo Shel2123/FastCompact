@@ -1,0 +1,19 @@
+[package]
+name = "orbit-ops"
+description = "Orbit file operations that work on every platform: publishing a result without overwriting anything."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+orbit-app.workspace = true
+orbit-domain.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

@@ -427,6 +427,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-ops"
+version = "0.1.0-beta.2"
+dependencies = [
+ "orbit-app",
+ "orbit-domain",
+ "rustix",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "orbit-runtime"
 version = "0.1.0-beta.2"
 dependencies = [

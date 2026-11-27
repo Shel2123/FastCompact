@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TARGET="${ORBIT_PORTABLE_TARGET:-x86_64-pc-windows-msvc}"
-CRATES=(orbit-domain orbit-app orbit-runtime)
+CRATES=(orbit-domain orbit-app orbit-runtime orbit-ops)
 PACKAGES=()
 DIRS=()
 for crate in "${CRATES[@]}"; do
