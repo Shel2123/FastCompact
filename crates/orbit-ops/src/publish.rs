@@ -244,7 +244,7 @@ fn is_not_supported_errno(_error: &io::Error) -> bool {
 }
 
 /// A [`JobError::Io`] that names what failed: `"<action>: <reason>"`.
-fn io_error(error: &io::Error, action: &str) -> JobError {
+pub(crate) fn io_error(error: &io::Error, action: &str) -> JobError {
     JobError::Io {
         kind: error.kind(),
         message: format!("{action}: {}", reason(error)),
@@ -255,7 +255,7 @@ fn io_error(error: &io::Error, action: &str) -> JobError {
 ///
 /// That also drops what tempfile appends after it: ` at path "…"` with the
 /// name of the temporary file, which means nothing to the user.
-fn reason(error: &io::Error) -> String {
+pub(crate) fn reason(error: &io::Error) -> String {
     let text = error.to_string();
     match text.split_once(" (os error ") {
         Some((reason, _)) => reason.to_owned(),
@@ -264,11 +264,11 @@ fn reason(error: &io::Error) -> String {
 }
 
 /// The name of `dir` in quotes, or the whole path for a root.
-fn folder(dir: &Path) -> String {
+pub(crate) fn folder(dir: &Path) -> String {
     quoted(dir.file_name().unwrap_or(dir.as_os_str()))
 }
 
-fn quoted(name: &OsStr) -> String {
+pub(crate) fn quoted(name: &OsStr) -> String {
     format!("“{}”", name.to_string_lossy())
 }
 

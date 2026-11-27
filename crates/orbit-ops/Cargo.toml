@@ -1,6 +1,6 @@
 [package]
 name = "orbit-ops"
-description = "Orbit file operations that work on every platform: publishing a result without overwriting anything."
+description = "Orbit file operations that work on every platform: ZIP archives and publishing a result without overwriting anything."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,10 @@ orbit-app.workspace = true
 orbit-domain.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["std"] }
+rustix = { workspace = true, features = ["std", "fs"] }
 
 [lints]
 workspace = true
