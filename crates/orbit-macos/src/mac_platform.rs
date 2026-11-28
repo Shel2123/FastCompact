@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::thread;
 
 use objc2::MainThreadMarker;
+use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use orbit_app::messages::AppEvent;
 use orbit_app::ports::{EventSink, MenuView, OperationExecutor};
@@ -23,10 +24,12 @@ use crate::platform::finder_target::FinderSelectionResolver;
 use crate::platform::hotkey::{HotkeyAdapter, HotkeyError, forward_signals};
 use crate::platform::permissions::{PermissionPrompt, accessibility_trusted};
 use crate::platform::shell::MacShell;
+use crate::ui::delegate::AppDelegate;
 use crate::ui::feedback::MacFeedback;
+use crate::ui::jobs::Jobs;
 use crate::ui::logging::{LoggingMenuView, LoggingParametersView};
 use crate::ui::radial_panel::RadialMenu;
-use crate::ui::status_item::status_item;
+use crate::ui::status_item::StatusMenu;
 
 /// Why the platform could not be created or started.
 #[derive(Debug, Error)]
@@ -59,6 +62,8 @@ pub struct MacPlatform {
     options: MacOptions,
     /// The child processes of jobs, which Quit stops.
     children: Children,
+    /// The jobs in the menu bar, made with the views and shared with Quit.
+    jobs: Option<Jobs>,
 }
 
 impl MacPlatform {
@@ -90,6 +95,19 @@ impl MacPlatform {
             tap,
             options,
             children: Children::new(),
+            jobs: None,
+        })
+    }
+
+    /// The jobs in the menu bar, with the item added on first use.
+    fn jobs(&mut self) -> &Jobs {
+        let (mtm, sender) = (self.mtm, self.sender);
+        self.jobs.get_or_insert_with(|| {
+            // The status bar wants the application connected first.
+            let _app = NSApplication::sharedApplication(mtm);
+            let sink: Arc<dyn EventSink> = Arc::new(sender);
+            let menu = StatusMenu::new(mtm, Arc::clone(&sink));
+            Jobs::new(mtm, Box::new(menu), sink)
         })
     }
 }
@@ -131,6 +149,7 @@ impl Platform for MacPlatform {
     }
 
     fn views(&mut self) -> Views {
+        let jobs = self.jobs().clone();
         let menu: Box<dyn MenuView> = match RadialMenu::new(
             self.mtm,
             self.options.menu_background,
@@ -149,6 +168,7 @@ impl Platform for MacPlatform {
             parameters: Box::new(LoggingParametersView),
             feedback: Box::new(MacFeedback::new(
                 self.mtm,
+                jobs,
                 self.options.menu_background,
                 self.options.info_twice,
             )),
@@ -156,19 +176,24 @@ impl Platform for MacPlatform {
         }
     }
 
-    fn run(self, mut handler: Handler) -> Result<(), PlatformError> {
+    fn run(mut self, mut handler: Handler) -> Result<(), PlatformError> {
+        let jobs = self.jobs().clone();
         let Self {
             mtm,
             sender,
             log,
             tap,
             options,
-            children: _,
+            children,
+            jobs: _,
         } = self;
         let sink: Arc<dyn EventSink> = Arc::new(sender);
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-        let _status_item = status_item(mtm);
+        // `NSApp` keeps its delegate weakly; this one lives until the loop
+        // returns.
+        let delegate = AppDelegate::new(mtm, jobs, children);
+        app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         run_in_order(
             || {
                 sender

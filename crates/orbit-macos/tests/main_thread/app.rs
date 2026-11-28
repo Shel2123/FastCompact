@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSEventTrackingRunLoopMode};
 use objc2_core_foundation::{CFRunLoop, kCFRunLoopDefaultMode};
 use orbit_app::messages::{AppEvent, GestureId};
 use orbit_app::ports::EventSink;
@@ -32,6 +33,9 @@ const B_BASE: u64 = 200_000;
 /// Ids of the events sent before the handler exists: `EARLY_BASE + index`.
 const EARLY_BASE: u64 = 300_000;
 const EARLY: u64 = 20;
+/// Ids of the events delivered while a menu tracks: `TRACKING_BASE + index`.
+const TRACKING_BASE: u64 = 400_000;
+const TRACKING: u64 = 50;
 
 pub(super) fn launch() -> ExitCode {
     match run() {
@@ -48,6 +52,10 @@ pub(super) fn launch() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
+    // NSApplication adds the event tracking and modal panel modes to the
+    // common modes of the main run loop; without it only the default mode
+    // is common.
+    let _app = NSApplication::sharedApplication(mtm);
     let sender = MainThreadSender::new(mtm).map_err(|err| err.to_string())?;
     if MainThreadSender::new(mtm).map(|_| ()) != Err(MainThreadError::AlreadyCreated) {
         return Err("a second sender was created".into());
@@ -133,7 +141,12 @@ fn run() -> Result<(), String> {
             off_main.borrow()
         ));
     }
-    let seen = seen.borrow();
+    check_order(&seen.borrow(), expected)?;
+    delivered_while_tracking(sender, &seen)?;
+    super::jobs::run(mtm)
+}
+
+fn check_order(seen: &[u64], expected: usize) -> Result<(), String> {
     if seen.len() != expected {
         return Err(format!("{} events, expected {expected}", seen.len()));
     }
@@ -157,6 +170,33 @@ fn run() -> Result<(), String> {
             other => return Err(format!("round {round}: a and b at {other:?}")),
         }
     }
+    Ok(())
+}
+
+/// Events sent from another thread arrive while the run loop is in
+/// `NSEventTrackingRunLoopMode`, as it is while a menu of the status item is
+/// open.
+fn delivered_while_tracking(
+    sender: MainThreadSender,
+    seen: &Rc<RefCell<Vec<u64>>>,
+) -> Result<(), String> {
+    let before = seen.borrow().len();
+    thread::spawn(move || {
+        for index in 0..TRACKING {
+            sender.send(cancelled(TRACKING_BASE + index));
+        }
+    })
+    .join()
+    .map_err(|_| "the tracking sender thread panicked")?;
+    let wanted: Vec<u64> = (0..TRACKING).map(|index| TRACKING_BASE + index).collect();
+    // SAFETY: reading an immutable framework constant.
+    let mode = unsafe { NSEventTrackingRunLoopMode };
+    super::jobs::pump_in(
+        mode,
+        || seen.borrow().get(before..) == Some(&wanted[..]),
+        "events in the event tracking mode",
+    )?;
+    println!("test main_thread: delivery in event tracking mode ... ok");
     Ok(())
 }
 

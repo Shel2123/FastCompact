@@ -73,3 +73,20 @@ P5 подробно (секунды по `/usr/bin/time -l`, размер арх
   - отмена: `try_wait` каждые 50 мс → `SIGKILL` и `wait`, временный файл удаляется. Прогресс только `Indeterminate`;
   - pid ребёнка лежит в `Children`, пока его не дождались; снятие и `kill_all` идут под одним замком, поэтому сигнал не уходит чужому процессу с тем же pid. `kill_all` нужен Quit (шаг 5).
 - Отладка: `ORBIT_DEBUG_JOB_DELAY_MS` — пауза перед job, отмена её прерывает (Z9); `ORBIT_DEBUG_JOB_STALL_MS` — сон без проверки отмены (Z8b).
+
+## Шаг 5. Прогресс, отмена, Quit на macOS
+
+- **`JobsIndicator`** (`ui/jobs_indicator.rs`) — автомат без AppKit, время приходит параметром. Job живёт от `job_started` до своего `notify`: `Queued` → `Running(Progress)` после первого `job_progress`. Показывается, когда прошло 500 мс от `job_started`, время в очереди тоже считается. Короткий job виден только тостом. `QueueFull` (`job_started` и сразу `notify`) не оставляет ничего.
+- **`Jobs`** (`ui/jobs.rs`) соединяет автомат, вид и таймеры. Делят его `MacFeedback` и делегат приложения. Таймер порога один, ставится на ближайший `deadline()`. Таймеры порога и Quit — `NSTimer` в `NSRunLoopCommonModes`, поэтому срабатывают и при открытом меню (`NSEventTrackingRunLoopMode`), и пока Quit ждёт (`NSModalPanelRunLoopMode`). Тихий ditto-job появляется по таймеру, без событий.
+- **Common modes зависят от `NSApplication`.** Режимы tracking и modal panel попадают в common modes главного run loop, только когда создан `NSApplication`. Без него в common modes лишь default: события `MainThreadSender` в tracking mode не доходят (проверено в `tests/main_thread`). В приложении `NSApp` есть всегда. Тест создаёт его сам.
+- **`StatusMenu`** (`ui/status_item.rs`):
+  - на каждый показанный job — неактивная строка («Compressing “Docs” — waiting», «… — 42%», «Compressing “Docs”…») и Cancel под ней; ниже разделитель и Quit;
+  - строки вставляются, меняют текст и удаляются на месте, меню не пересобирается и не закрывается;
+  - Cancel хранит id job в `tag` и шлёт `CancelJobRequested` через sink. Цель действия — свой класс, его держит `StatusMenu`, потому что пункт меню держит цель слабо;
+  - значок: «◎» без показанных jobs; template-кольцо по среднему проценту тех показанных jobs, что знают свою долю (перерисовка только при смене целого процента); `circle.dashed`, пока доли не знает никто.
+- **Quit** (`ui/delegate.rs`, `applicationShouldTerminate:`):
+  - без jobs выход сразу;
+  - с jobs отменяются все: в очереди, ещё не показанные и запущенные уже во время ожидания. Делегат отвечает `TerminateLater`;
+  - выход по последнему `notify`, но не позже чем через 2 с. По сроку `Children::kill_all` шлёт `SIGKILL` ditto-детям, затем `replyToApplicationShouldTerminate(true)`;
+  - временный `.orbit-*.tmp` застрявшего job может остаться: worker не успевает его удалить (Z8b);
+  - пока Quit ждёт, тосты не показываются.

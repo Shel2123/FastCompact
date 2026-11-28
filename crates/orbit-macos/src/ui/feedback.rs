@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use objc2::MainThreadMarker;
-use orbit_app::messages::{JobId, Notice, Progress};
+use orbit_app::messages::{JobId, JobSpec, Notice, Progress};
 use orbit_app::ports::Feedback;
 use orbit_domain::target::FileTarget;
 use tracing::{debug, error, info};
@@ -16,6 +16,7 @@ use super::info_close::CloseWatch;
 use super::info_panel::InfoPanel;
 use super::info_sheet::{MacFormats, info_sheet};
 use super::info_size::SizeJob;
+use super::jobs::Jobs;
 use super::notice_text::notice_text;
 use super::toast::Toast;
 
@@ -23,6 +24,8 @@ use super::toast::Toast;
 pub struct MacFeedback {
     mtm: MainThreadMarker,
     toast: Toast,
+    /// The jobs in the menu bar, shared with Quit.
+    jobs: Jobs,
     info: Rc<InfoPanel>,
     formats: Rc<MacFormats>,
     /// What closes the info panel while it is on screen.
@@ -34,15 +37,21 @@ pub struct MacFeedback {
 }
 
 impl MacFeedback {
-    /// Builds the windows, hidden. `background` is the one asked for by the
-    /// debug switch, if any; with `info_twice` (a debug switch too) the info
-    /// panel is shown twice for each request, to see the second replace the
-    /// first.
-    pub fn new(mtm: MainThreadMarker, background: Option<Background>, info_twice: bool) -> Self {
+    /// Builds the windows, hidden; jobs are shown by `jobs`. `background`
+    /// is the one asked for by the debug switch, if any; with `info_twice`
+    /// (a debug switch too) the info panel is shown twice for each request,
+    /// to see the second replace the first.
+    pub fn new(
+        mtm: MainThreadMarker,
+        jobs: Jobs,
+        background: Option<Background>,
+        info_twice: bool,
+    ) -> Self {
         let background = Background::available(background);
         Self {
             mtm,
             toast: Toast::new(mtm, background),
+            jobs,
             info: Rc::new(InfoPanel::new(mtm, background)),
             formats: Rc::new(MacFormats::new()),
             watch: None,
@@ -104,14 +113,33 @@ impl MacFeedback {
 }
 
 impl Feedback for MacFeedback {
+    fn job_started(&mut self, spec: &JobSpec) {
+        info!(job = spec.id.get(), operation = ?spec.operation, "job started");
+        self.jobs.started(spec);
+    }
+
     fn job_progress(&mut self, job: JobId, progress: Progress) {
-        // Shown from stage 7, with the jobs.
-        info!(job = job.get(), ?progress, "job progress");
+        debug!(job = job.get(), ?progress, "job progress");
+        self.jobs.progress(job, progress);
     }
 
     fn notify(&mut self, notice: &Notice) {
         info!(?notice, "notify");
-        self.toast.show(&notice_text(notice));
+        let finished = match notice {
+            Notice::JobSucceeded { job, .. } | Notice::JobFailed { job, .. } => Some(*job),
+            _ => None,
+        };
+        // While Quit waits, the results of the cancelled jobs would flash
+        // up just before the application goes.
+        if self.jobs.is_quitting() {
+            debug!("quitting; no toast");
+        } else {
+            self.toast.show(&notice_text(notice));
+        }
+        // Last: the end of the last job may quit the application.
+        if let Some(job) = finished {
+            self.jobs.finished(job);
+        }
     }
 
     fn show_info(&mut self, target: &FileTarget) {
