@@ -146,6 +146,7 @@ impl Inner {
         let tint = match text.tone {
             Tone::Success => NSColor::systemGreenColor(),
             Tone::Failure => NSColor::systemOrangeColor(),
+            Tone::Neutral => NSColor::secondaryLabelColor(),
         };
         self.icon.setContentTintColor(Some(&tint));
         self.label.setStringValue(&NSString::from_str(&text.text));

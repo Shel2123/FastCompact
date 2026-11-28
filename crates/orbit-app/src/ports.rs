@@ -104,7 +104,27 @@ pub trait ParametersView {
 }
 
 /// What the user is told besides the menu and the form.
+///
+/// # Jobs
+///
+/// Every job the controller starts goes through the same calls, all with
+/// its id:
+///
+/// 1. [`job_started`](Self::job_started) once, when the job is handed to
+///    the runtime. The job may still wait for a worker.
+/// 2. [`job_progress`](Self::job_progress) with
+///    [`Progress::Indeterminate`] once a worker takes it, then more
+///    progress. A job that never reaches a worker, because the queue was
+///    full or it was cancelled while waiting, has no progress.
+/// 3. [`notify`](Self::notify) once, with [`Notice::JobSucceeded`] or
+///    [`Notice::JobFailed`].
 pub trait Feedback {
+    /// Notes a job that was queued. Does nothing unless the adapter shows
+    /// jobs.
+    fn job_started(&mut self, spec: &JobSpec) {
+        let _ = spec;
+    }
+
     /// Shows the progress of a job.
     fn job_progress(&mut self, job: JobId, progress: Progress);
 

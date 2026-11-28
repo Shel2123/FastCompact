@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
-use orbit_app::messages::{AppEvent, JobError, JobId, JobOutput, JobSpec};
+use orbit_app::messages::{AppEvent, JobError, JobId, JobOutput, JobSpec, Progress};
 use orbit_app::ports::{CancelToken, EventSink, JobContext, OperationExecutor};
 use tracing::{debug, error, info, warn};
 
@@ -44,6 +44,10 @@ struct Work {
 /// Lives on the main thread. Every job passed to [`start`](Self::start) ends
 /// with exactly one [`AppEvent::JobFinished`] through the sink, also when it
 /// could not be queued, failed to start, was cancelled or panicked.
+///
+/// A worker that takes a job sends [`Progress::Indeterminate`] for it before
+/// the executor runs, so the job shows as running even if the executor never
+/// reports. A job that ends without a worker sends no progress.
 pub struct JobRunner {
     sender: Option<Sender<Work>>,
     workers: Vec<JoinHandle<()>>,
@@ -177,6 +181,12 @@ fn run(
     sink: &Arc<dyn EventSink>,
 ) -> Result<JobOutput, JobError> {
     let job = spec.id;
+    // Past the throttle: the first report of the executor still goes out
+    // at once.
+    sink.send(AppEvent::JobProgress {
+        job,
+        progress: Progress::Indeterminate,
+    });
     let throttle = Mutex::new(Throttle::new(PROGRESS_INTERVAL));
     let progress_sink = Arc::clone(sink);
     let context = JobContext::new(token, move |progress| {
@@ -229,7 +239,7 @@ impl Throttle {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use orbit_app::messages::{Fraction, Progress};
+    use orbit_app::messages::Fraction;
     use orbit_domain::operation::OperationSpec;
 
     use super::*;
@@ -276,6 +286,17 @@ mod tests {
         }
     }
 
+    /// The progress a worker sends when it takes a job.
+    fn started(event: AppEvent) -> u64 {
+        match event {
+            AppEvent::JobProgress {
+                job,
+                progress: Progress::Indeterminate,
+            } => job.get(),
+            other => panic!("not a start: {other:?}"),
+        }
+    }
+
     fn finished(event: AppEvent) -> (u64, Result<JobOutput, JobError>) {
         match event {
             AppEvent::JobFinished { job, result } => (job.get(), result),
@@ -293,7 +314,9 @@ mod tests {
         let (mut runner, sink) = runner(JobsConfig::default(), |spec, _| output(spec));
         runner.start(spec(1));
         assert!(runner.tracks(JobId::new(1)));
+        assert_eq!(started(sink.next()), 1);
         assert_eq!(finished(sink.next()), (1, output(&spec(1))));
+        sink.assert_empty();
         runner.finished(JobId::new(1));
         assert!(!runner.tracks(JobId::new(1)));
         runner.shutdown();
@@ -313,11 +336,14 @@ mod tests {
         gate.wait_entered();
         runner.start(spec(2));
         runner.start(spec(3));
+        assert_eq!(started(sink.next()), 1);
         assert_eq!(finished(sink.next()), (3, Err(JobError::QueueFull)));
         assert!(!runner.tracks(JobId::new(3)));
         gate.open();
         assert_eq!(finished(sink.next()).0, 1);
+        assert_eq!(started(sink.next()), 2);
         assert_eq!(finished(sink.next()).0, 2);
+        sink.assert_empty();
         runner.shutdown();
     }
 
@@ -339,8 +365,11 @@ mod tests {
         runner.start(spec(2));
         runner.cancel(JobId::new(2));
         gate.open();
+        assert_eq!(started(sink.next()), 1);
         assert_eq!(finished(sink.next()).0, 1);
+        // No progress: the worker never ran it.
         assert_eq!(finished(sink.next()), (2, Err(JobError::Cancelled)));
+        sink.assert_empty();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         runner.shutdown();
     }
@@ -361,6 +390,7 @@ mod tests {
         gate.wait_entered();
         runner.cancel(JobId::new(1));
         gate.open();
+        assert_eq!(started(sink.next()), 1);
         assert_eq!(finished(sink.next()), (1, Err(JobError::Cancelled)));
         runner.shutdown();
     }
@@ -374,11 +404,13 @@ mod tests {
             output(spec)
         });
         runner.start(spec(1));
+        assert_eq!(started(sink.next()), 1);
         assert_eq!(
             finished(sink.next()),
             (1, Err(JobError::Internal("operation panicked".into())))
         );
         runner.start(spec(2));
+        assert_eq!(started(sink.next()), 2);
         assert_eq!(finished(sink.next()), (2, output(&spec(2))));
         runner.shutdown();
     }
@@ -413,6 +445,7 @@ mod tests {
             output(spec)
         });
         runner.start(spec(1));
+        assert_eq!(started(sink.next()), 1);
         let mut reported = Vec::new();
         loop {
             match sink.next() {
@@ -426,6 +459,7 @@ mod tests {
                 }
             }
         }
+        // The first fraction is not held back by the worker's progress.
         assert_eq!(reported, fractions);
         runner.shutdown();
     }
@@ -453,6 +487,7 @@ mod tests {
         if release.join().is_err() {
             panic!("gate thread panicked");
         }
+        assert_eq!(started(sink.next()), 1);
         assert_eq!(finished(sink.next()), (1, Err(JobError::Cancelled)));
         assert_eq!(finished(sink.next()), (2, Err(JobError::Cancelled)));
         runner.start(spec(3));

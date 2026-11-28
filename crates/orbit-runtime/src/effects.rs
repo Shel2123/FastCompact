@@ -27,12 +27,14 @@ pub struct Services {
 /// through the sink, or to the user through [`Feedback`], never by calling
 /// the controller directly.
 ///
-/// Each effect calls one port method, with two exceptions: a failed shell
-/// action is followed by [`Notice::ActionFailed`], and a written clipboard
-/// by [`Notice::PathCopied`]. A successful Reveal tells nothing: the file
+/// Each effect calls one port method, with three exceptions: a started job
+/// is noted with [`Feedback::job_started`] before it is queued, a failed
+/// shell action is followed by [`Notice::ActionFailed`], and a written
+/// clipboard by [`Notice::PathCopied`]. A successful Reveal tells nothing: the file
 /// manager shows the result.
 ///
 /// [`Feedback`]: orbit_app::ports::Feedback
+/// [`Feedback::job_started`]: orbit_app::ports::Feedback::job_started
 pub fn execute(effect: Effect, services: &mut Services) {
     let views = &mut services.views;
     match effect {
@@ -46,7 +48,10 @@ pub fn execute(effect: Effect, services: &mut Services) {
                 });
             }
         }
-        Effect::StartJob(spec) => services.jobs.start(spec),
+        Effect::StartJob(spec) => {
+            views.feedback.job_started(&spec);
+            services.jobs.start(spec);
+        }
         Effect::CancelJob(job) => services.jobs.cancel(job),
         Effect::PresentMenu(model) => views.menu.present(&model),
         Effect::Highlight(highlight) => views.menu.highlight(highlight),
@@ -303,6 +308,15 @@ mod tests {
         let journal = Journal::new();
         let (mut services, sink) = services(&journal, None);
         execute(Effect::StartJob(spec(JobId::new(1))), &mut services);
+        // Noted before it is queued.
+        assert_eq!(journal.take(), vec![Call::JobStarted(spec(JobId::new(1)))]);
+        assert_eq!(
+            sink.next(),
+            AppEvent::JobProgress {
+                job: JobId::new(1),
+                progress: Progress::Indeterminate,
+            }
+        );
         let AppEvent::JobFinished { job, result } = sink.next() else {
             panic!("not a finish");
         };

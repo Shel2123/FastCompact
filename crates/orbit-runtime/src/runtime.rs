@@ -112,7 +112,9 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Mutex;
 
-    use orbit_app::messages::{GestureId, JobError, JobOutput, JobSpec, Notice, ResolveError};
+    use orbit_app::messages::{
+        GestureId, JobError, JobId, JobOutput, JobSpec, Notice, Progress, ResolveError,
+    };
     use orbit_app::ports::{JobContext, ResolveRequest, TargetResolver};
     use orbit_app::state::MenuState;
     use orbit_domain::action::{Availability, MENU_LAYOUT, MenuItem, UnavailableReason};
@@ -148,7 +150,7 @@ mod tests {
         }
     }
 
-    fn runtime(gate: Option<Gate>, jobs: JobsConfig) -> (Runtime, ChannelSink) {
+    fn runtime(gate: Option<Gate>, jobs: JobsConfig) -> (Runtime, ChannelSink, Journal) {
         runtime_with(gate, jobs, &ActionId::ALL)
     }
 
@@ -156,19 +158,20 @@ mod tests {
         gate: Option<Gate>,
         jobs: JobsConfig,
         actions: &'static [ActionId],
-    ) -> (Runtime, ChannelSink) {
+    ) -> (Runtime, ChannelSink, Journal) {
         let sink = ChannelSink::new();
+        let journal = Journal::new();
         let made = Runtime::new(
             sink.shared(),
             ResolverFactory::new(|| Resolves),
             Arc::new(Zips(gate)),
             FileNamePolicy::UNIVERSAL,
             actions,
-            views(&Journal::new(), None),
+            views(&journal, None),
             jobs,
         );
         match made {
-            Ok(runtime) => (runtime, sink),
+            Ok(runtime) => (runtime, sink, journal),
             Err(err) => panic!("runtime: {err}"),
         }
     }
@@ -182,10 +185,18 @@ mod tests {
     }
 
     /// Opens the menu of `gesture` with the answer of the resolver thread
-    /// and returns its center.
+    /// and returns its center. Events of running jobs that come first are
+    /// handled on the way.
     fn open_menu(runtime: &mut Runtime, sink: &ChannelSink, gesture: GestureId) -> ScreenPoint {
         runtime.handle(invoked(gesture));
-        runtime.handle(sink.next());
+        loop {
+            let event = sink.next();
+            let answer = matches!(event, AppEvent::TargetResolved { .. });
+            runtime.handle(event);
+            if answer {
+                break;
+            }
+        }
         match runtime.controller.state().menu {
             MenuState::Open { center, .. } => center,
             ref other => panic!("menu not open: {other:?}"),
@@ -209,16 +220,22 @@ mod tests {
 
     #[test]
     fn target_from_the_resolver_thread_opens_the_menu() {
-        let (mut runtime, sink) = runtime(None, JobsConfig::default());
+        let (mut runtime, sink, _) = runtime(None, JobsConfig::default());
         open_menu(&mut runtime, &sink, A);
         sink.assert_empty();
     }
 
     #[test]
     fn job_runs_and_its_finish_clears_the_state() {
-        let (mut runtime, sink) = runtime(None, JobsConfig::default());
+        let (mut runtime, sink, _) = runtime(None, JobsConfig::default());
         zip(&mut runtime, &sink, A);
         assert_eq!(runtime.controller.state().jobs.len(), 1);
+        let progress = sink.next();
+        assert!(
+            matches!(progress, AppEvent::JobProgress { .. }),
+            "{progress:?}"
+        );
+        runtime.handle(progress);
         let finish = sink.next();
         let AppEvent::JobFinished { job, result } = &finish else {
             panic!("not a finish: {finish:?}");
@@ -236,7 +253,7 @@ mod tests {
 
     #[test]
     fn stopped_resolver_refuses_the_gesture() {
-        let (mut runtime, sink) = runtime(None, JobsConfig::default());
+        let (mut runtime, sink, _) = runtime(None, JobsConfig::default());
         runtime.services.resolver.shutdown();
         runtime.handle(invoked(A));
         let answer = sink.next();
@@ -254,7 +271,7 @@ mod tests {
     #[test]
     fn job_that_does_not_fit_is_removed() {
         let gate = Gate::new();
-        let (mut runtime, sink) = runtime(
+        let (mut runtime, sink, _) = runtime(
             Some(gate.clone()),
             JobsConfig {
                 workers: 1,
@@ -280,11 +297,155 @@ mod tests {
         gate.open();
         gate.wait_entered();
         gate.open();
-        for _ in 0..2 {
-            let finish = sink.next();
-            runtime.handle(finish);
+        finish_all(&mut runtime, &sink);
+    }
+
+    /// Handles events until no job is left.
+    fn finish_all(runtime: &mut Runtime, sink: &ChannelSink) {
+        while !runtime.controller.state().jobs.is_empty() {
+            let event = sink.next();
+            runtime.handle(event);
         }
-        assert!(runtime.controller.state().jobs.is_empty());
+    }
+
+    /// The ids of the jobs in the order they were started, and the job calls
+    /// of the feedback for each.
+    fn job_calls(journal: &Journal) -> Vec<(JobId, Vec<Call>)> {
+        let calls = journal.take();
+        let mut jobs: Vec<(JobId, Vec<Call>)> = Vec::new();
+        for call in calls {
+            let job = match &call {
+                Call::JobStarted(spec) => {
+                    jobs.push((spec.id, Vec::new()));
+                    spec.id
+                }
+                Call::JobProgress(job, _)
+                | Call::Notify(Notice::JobSucceeded { job, .. } | Notice::JobFailed { job, .. }) => {
+                    *job
+                }
+                _ => continue,
+            };
+            match jobs.iter_mut().find(|(id, _)| *id == job) {
+                Some((_, of_job)) => of_job.push(call),
+                None => panic!("{call:?} before the start of its job"),
+            }
+        }
+        jobs
+    }
+
+    fn spec_of(call: &Call) -> JobSpec {
+        match call {
+            Call::JobStarted(spec) => spec.clone(),
+            other => panic!("not a start: {other:?}"),
+        }
+    }
+
+    /// Started, running, finished: what the menu bar shows of a job.
+    #[test]
+    fn feedback_sees_a_job_start_run_and_finish() {
+        let (mut runtime, sink, journal) = runtime(None, JobsConfig::default());
+        zip(&mut runtime, &sink, A);
+        finish_all(&mut runtime, &sink);
+        let jobs = job_calls(&journal);
+        let [(job, calls)] = jobs.as_slice() else {
+            panic!("{jobs:?}");
+        };
+        let spec = spec_of(&calls[0]);
+        assert_eq!(
+            calls,
+            &vec![
+                Call::JobStarted(spec.clone()),
+                Call::JobProgress(*job, Progress::Indeterminate),
+                Call::Notify(Notice::JobSucceeded {
+                    job: *job,
+                    operation: spec.operation,
+                    output: JobOutput {
+                        path: "/tmp/Docs.zip".into(),
+                    },
+                }),
+            ]
+        );
+    }
+
+    /// A job that finds the queue full and one cancelled while it waits are
+    /// started and finished, with no progress in between.
+    #[test]
+    fn jobs_that_never_run_have_no_progress() {
+        let gate = Gate::new();
+        let (mut runtime, sink, journal) = runtime(
+            Some(gate.clone()),
+            JobsConfig {
+                workers: 1,
+                queue: 1,
+            },
+        );
+        // The first job holds the worker, the second waits, the third finds
+        // the queue full.
+        zip(&mut runtime, &sink, GestureId(1));
+        gate.wait_entered();
+        zip(&mut runtime, &sink, GestureId(2));
+        zip(&mut runtime, &sink, GestureId(3));
+        let ids: Vec<JobId> = journal
+            .peek()
+            .iter()
+            .filter_map(|call| match call {
+                Call::JobStarted(spec) => Some(spec.id),
+                _ => None,
+            })
+            .collect();
+        let [_, waiting, _] = ids.as_slice() else {
+            panic!("{ids:?}");
+        };
+        runtime.handle(AppEvent::CancelJobRequested { job: *waiting });
+        gate.open();
+        finish_all(&mut runtime, &sink);
+
+        let jobs = job_calls(&journal);
+        let [(running, first), (waiting, second), (full, third)] = jobs.as_slice() else {
+            panic!("{jobs:?}");
+        };
+        let ended = |job: JobId, spec: &JobSpec, result: Result<JobOutput, JobError>| {
+            Call::Notify(match result {
+                Ok(output) => Notice::JobSucceeded {
+                    job,
+                    operation: spec.operation.clone(),
+                    output,
+                },
+                Err(error) => Notice::JobFailed {
+                    job,
+                    operation: spec.operation.clone(),
+                    error,
+                },
+            })
+        };
+        let spec = spec_of(&first[0]);
+        let output = Ok(JobOutput {
+            path: "/tmp/Docs.zip".into(),
+        });
+        assert_eq!(
+            first,
+            &vec![
+                Call::JobStarted(spec.clone()),
+                Call::JobProgress(*running, Progress::Indeterminate),
+                ended(*running, &spec, output),
+            ]
+        );
+        let spec = spec_of(&second[0]);
+        assert_eq!(
+            second,
+            &vec![
+                Call::JobStarted(spec.clone()),
+                ended(*waiting, &spec, Err(JobError::Cancelled)),
+            ]
+        );
+        let spec = spec_of(&third[0]);
+        assert_eq!(
+            third,
+            &vec![
+                Call::JobStarted(spec.clone()),
+                ended(*full, &spec, Err(JobError::QueueFull)),
+            ]
+        );
     }
 
     /// The order in which `run` used the parts of a [`FakePlatform`].
@@ -394,7 +555,7 @@ mod tests {
     fn a_platform_supports_every_action_unless_it_says_otherwise() {
         let actions = FakePlatform::new().supported_actions();
         assert_eq!(actions, &ActionId::ALL);
-        let (mut runtime, sink) = runtime_with(None, JobsConfig::default(), actions);
+        let (mut runtime, sink, _) = runtime_with(None, JobsConfig::default(), actions);
         open_menu(&mut runtime, &sink, A);
         let MenuState::Open { slots, .. } = &runtime.controller.state().menu else {
             panic!("menu not open");

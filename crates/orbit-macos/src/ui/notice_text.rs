@@ -1,9 +1,10 @@
 //! What a toast says for each [`Notice`].
 
+use std::io::ErrorKind;
 use std::path::Path;
 use std::time::Duration;
 
-use orbit_app::messages::{Notice, ResolveError, ShellAction};
+use orbit_app::messages::{JobError, Notice, ResolveError, ShellAction};
 use orbit_domain::operation::OperationSpec;
 
 /// How long a toast of good news stays.
@@ -18,6 +19,8 @@ pub enum Tone {
     Success,
     /// Something did not happen.
     Failure,
+    /// Something stopped because the user asked.
+    Neutral,
 }
 
 /// What a toast shows.
@@ -39,6 +42,15 @@ impl ToastText {
             symbol,
             text,
             tone: Tone::Success,
+            duration: SUCCESS_DURATION,
+        }
+    }
+
+    fn neutral(symbol: &'static str, text: String) -> Self {
+        Self {
+            symbol,
+            text,
+            tone: Tone::Neutral,
             duration: SUCCESS_DURATION,
         }
     }
@@ -67,7 +79,7 @@ pub fn notice_text(notice: &Notice) -> ToastText {
         ),
         Notice::JobFailed {
             operation, error, ..
-        } => ToastText::failure(format!("{} failed: {error}", title(operation))),
+        } => job_failed(operation, error),
         Notice::ActionFailed { action, message } => {
             let what = match action {
                 ShellAction::CopyPath => "Couldn't copy the path",
@@ -75,6 +87,24 @@ pub fn notice_text(notice: &Notice) -> ToastText {
             };
             ToastText::failure(format!("{what}: {message}"))
         }
+    }
+}
+
+/// A job that did not produce its result.
+fn job_failed(operation: &OperationSpec, error: &JobError) -> ToastText {
+    match error {
+        // The user asked for it: not a failure.
+        JobError::Cancelled => {
+            ToastText::neutral("xmark.circle", format!("{} cancelled", title(operation)))
+        }
+        // Mostly a disk the result can't be published on safely, with a
+        // sentence of its own. Any other unsupported call still names what
+        // failed in the message (“couldn't read “a”: …”).
+        JobError::Io {
+            kind: ErrorKind::Unsupported,
+            message,
+        } => ToastText::failure(message.clone()),
+        error => ToastText::failure(format!("{} failed: {error}", title(operation))),
     }
 }
 
@@ -127,7 +157,7 @@ mod tests {
     use std::collections::HashSet;
     use std::io;
 
-    use orbit_app::messages::{JobError, JobId, JobOutput};
+    use orbit_app::messages::{JobId, JobOutput};
 
     use super::*;
 
@@ -242,5 +272,37 @@ mod tests {
         });
         assert_eq!(toast.text, "ZIP failed: permission denied");
         assert_eq!(toast.tone, Tone::Failure);
+    }
+
+    fn failed_zip(error: JobError) -> ToastText {
+        notice_text(&Notice::JobFailed {
+            job: JobId::new(1),
+            operation: OperationSpec::ArchiveZip,
+            error,
+        })
+    }
+
+    #[test]
+    fn a_cancelled_job_is_neither_good_news_nor_a_failure() {
+        assert_eq!(
+            failed_zip(JobError::Cancelled),
+            ToastText {
+                symbol: "xmark.circle",
+                text: "ZIP cancelled".into(),
+                tone: Tone::Neutral,
+                duration: SUCCESS_DURATION,
+            }
+        );
+    }
+
+    #[test]
+    fn a_disk_without_safe_publishing_is_told_without_a_prefix() {
+        let toast = failed_zip(JobError::Io {
+            kind: io::ErrorKind::Unsupported,
+            message: "Orbit can't safely create a ZIP on this disk".into(),
+        });
+        assert_eq!(toast.text, "Orbit can't safely create a ZIP on this disk");
+        assert_eq!(toast.tone, Tone::Failure);
+        assert_eq!(toast.duration, FAILURE_DURATION);
     }
 }

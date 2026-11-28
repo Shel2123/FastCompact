@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use crossbeam_channel::{Receiver, Sender};
 use orbit_app::catalog::MenuModel;
 use orbit_app::messages::{
-    AppEvent, GestureId, JobId, Notice, ParameterError, ParametersModel, Progress,
+    AppEvent, GestureId, JobId, JobSpec, Notice, ParameterError, ParametersModel, Progress,
 };
 use orbit_app::ports::{EventSink, Feedback, MenuView, ParametersView, Shell, ShellError};
 use orbit_app::state::Highlight;
@@ -124,6 +124,7 @@ pub enum Call {
     FormPresent(ParametersModel),
     FormInvalid(GestureId, ParameterError),
     FormHide,
+    JobStarted(JobSpec),
     JobProgress(JobId, Progress),
     Notify(Notice),
     ShowInfo(FileTarget),
@@ -142,6 +143,11 @@ impl Journal {
 
     fn push(&self, call: Call) {
         self.0.borrow_mut().push(call);
+    }
+
+    /// Everything recorded so far, kept in the journal.
+    pub fn peek(&self) -> Vec<Call> {
+        self.0.borrow().clone()
     }
 
     /// Everything recorded so far; the journal starts again empty.
@@ -193,6 +199,10 @@ impl ParametersView for Fake {
 }
 
 impl Feedback for Fake {
+    fn job_started(&mut self, spec: &JobSpec) {
+        self.0.push(Call::JobStarted(spec.clone()));
+    }
+
     fn job_progress(&mut self, job: JobId, progress: Progress) {
         self.0.push(Call::JobProgress(job, progress));
     }
