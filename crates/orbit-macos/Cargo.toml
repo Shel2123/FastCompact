@@ -9,6 +9,7 @@ publish.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 orbit-app.workspace = true
 orbit-domain.workspace = true
+orbit-ops.workspace = true
 orbit-runtime.workspace = true
 dispatch2.workspace = true
 global-hotkey.workspace = true
@@ -115,6 +116,7 @@ objc2-quartz-core = { workspace = true, features = [
     "CAShapeLayer",
     "CATransaction",
 ] }
+tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

@@ -60,3 +60,16 @@ P5 подробно (секунды по `/usr/bin/time -l`, размер арх
 
 1. **Тома без исключающего rename (exFAT, P2).** I5 остаётся строгим. `O_CREAT|O_EXCL` резервирует имя атомарно, но последующий `rename` перезапишет файл, если кто-то подменил резерв; даже надёжная сверка inode оставляет гонку между проверкой и `rename`. Поэтому: `ENOTSUP` от `persist_noclobber` → job останавливается, временный архив удаляется, тост «Orbit can't safely create a ZIP on this disk». Текст общий: тип файловой системы Orbit не проверяет. `AlreadyExists` → следующий кандидат с тем же временным архивом.
 2. **xattr и подписи `.app` (P6).** Переносимый writer пишет AppleDouble-sidecar'ы. Кодирует их система: `fcopyfile(COPYFILE_PACK)` на дескрипторе, который обход уже проверил; этот код живёт в `orbit-macos`, `orbit-ops` только пишет переданные байты под `__MACOSX/`. Writer, прогресс и отмена остаются одни. P11 — проверка перед каждым релизом. Если P11 когда-нибудь не пройдёт, запасной путь: `ditto` для пакетов **и для папок, внутри которых есть `.app`** — иначе архив родительской папки сломается так же.
+
+## Шаг 4. Executor macOS
+
+`MacExecutor` (`orbit-macos/src/operations`) исполняет только ZIP; `supported_actions` macOS — CopyPath, ShowInfo, Reveal, ArchiveZip. Backend выбирает `ORBIT_ZIP_BACKEND=portable|ditto`, по умолчанию `portable`; как и другие переключатели `MacOptions`, переменная читается только в debug-сборке. При старте в логе строка `executor ready zip_backend=…`.
+
+- **Portable** — `orbit_ops::archive::archive_zip` с DOS-временем из `localtime_r` и sidecar'ами из `fcopyfile(COPYFILE_PACK | COPYFILE_XATTR | COPYFILE_ACL)`. Один анонимный scratch-файл на job, создаётся при первом объекте с xattr, перед каждым вызовом усекается. Том без xattr (`ENOTSUP`) — sidecar'а нет, это не ошибка. Объект только с ACL и без xattr sidecar'а не получает. Новые файлы на macOS почти всегда несут `com.apple.provenance`, снять его нельзя, поэтому sidecar есть почти у каждой записи (как в P11).
+- **Ditto** — для разработки и диагностики, не даёт гарантий переносимого backend'а:
+  - ditto открывает источник по пути и проходит по symlink, переданному как источник. Orbit сверяет источник с целью до запуска (identity, тип, size, mtime) и после выхода ditto, до публикации (identity и тип; у файла ещё size и mtime). Подмена и возврат объекта, пока ditto работает, не ловятся;
+  - `--keepParent` только для папки и пакета: у файла флаг кладёт в архив имя родительской папки (`Parent/a.txt`), в P10 это не проверялось;
+  - stderr читает отдельный поток, хранится хвост 4 КиБ; ненулевой код → `Io` с последней непустой строкой (`ditto: <путь>: <причина>`);
+  - отмена: `try_wait` каждые 50 мс → `SIGKILL` и `wait`, временный файл удаляется. Прогресс только `Indeterminate`;
+  - pid ребёнка лежит в `Children`, пока его не дождались; снятие и `kill_all` идут под одним замком, поэтому сигнал не уходит чужому процессу с тем же pid. `kill_all` нужен Quit (шаг 5).
+- Отладка: `ORBIT_DEBUG_JOB_DELAY_MS` — пауза перед job, отмена её прерывает (Z9); `ORBIT_DEBUG_JOB_STALL_MS` — сон без проверки отмены (Z8b).

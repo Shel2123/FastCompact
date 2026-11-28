@@ -1,5 +1,5 @@
 //! Options of the macOS platform, including the switches for the manual
-//! checks of stage 4 (`docs/stage-4.md`).
+//! checks of stages 4 and 7 (`docs/stage-4.md`, `docs/stage-7.md`).
 //!
 //! Read from the environment in debug builds only; a release build always
 //! runs with the defaults.
@@ -9,6 +9,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime};
 use tracing::{info, warn};
 
+use crate::operations::{JobPauses, ZipBackend};
 use crate::ui::backdrop::Background;
 
 /// When the secure input pulse starts and ends, after the press.
@@ -38,6 +39,11 @@ pub struct MacOptions {
     /// `ORBIT_DEBUG_INFO_TWICE=1`: each "show info" shows the info panel
     /// twice in a row, to see the second replace the first.
     pub info_twice: bool,
+    /// `ORBIT_ZIP_BACKEND=portable|ditto`: what makes ZIP archives.
+    pub zip_backend: ZipBackend,
+    /// `ORBIT_DEBUG_JOB_DELAY_MS` and `ORBIT_DEBUG_JOB_STALL_MS`: pauses
+    /// before every job, one that a cancel ends and one that it does not.
+    pub job_pauses: JobPauses,
 }
 
 impl MacOptions {
@@ -62,6 +68,11 @@ impl MacOptions {
             menu_background: menu_background(),
             menu_shift: menu_shift(),
             info_twice: flag("ORBIT_DEBUG_INFO_TWICE"),
+            zip_backend: zip_backend(),
+            job_pauses: JobPauses {
+                delay: millis("ORBIT_DEBUG_JOB_DELAY_MS"),
+                stall: millis("ORBIT_DEBUG_JOB_STALL_MS"),
+            },
         };
         if settings != Self::default() {
             warn!(?settings, "debug switches are on");
@@ -81,6 +92,20 @@ fn menu_background() -> Option<Background> {
         );
     }
     background
+}
+
+/// `ORBIT_ZIP_BACKEND`, or the portable backend if it is unset or unknown.
+fn zip_backend() -> ZipBackend {
+    let Ok(name) = std::env::var("ORBIT_ZIP_BACKEND") else {
+        return ZipBackend::default();
+    };
+    ZipBackend::parse(&name).unwrap_or_else(|| {
+        warn!(
+            name,
+            "ORBIT_ZIP_BACKEND is not portable or ditto; using portable"
+        );
+        ZipBackend::default()
+    })
 }
 
 /// `ORBIT_DEBUG_MENU_SHIFT`, or `(0, 0)` if it is unset or not `dx,dy`.

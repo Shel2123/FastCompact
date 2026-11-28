@@ -7,6 +7,7 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use orbit_app::messages::AppEvent;
 use orbit_app::ports::{EventSink, MenuView, OperationExecutor};
+use orbit_domain::action::ActionId;
 use orbit_domain::operation::FileNamePolicy;
 use orbit_runtime::{Handler, Platform, PlatformError, ResolverFactory, Views};
 use thiserror::Error;
@@ -14,7 +15,8 @@ use tracing::{error, info};
 
 use crate::debug::{self, MacOptions};
 use crate::main_thread::{MainThreadError, MainThreadSender};
-use crate::operations::unavailable::UnavailableExecutor;
+use crate::operations::MacExecutor;
+use crate::operations::children::Children;
 use crate::platform::event_tap::log::InputLog;
 use crate::platform::event_tap::tap::{EventTap, TapError, TapOptions};
 use crate::platform::finder_target::FinderSelectionResolver;
@@ -55,6 +57,8 @@ pub struct MacPlatform {
     log: Arc<InputLog>,
     tap: EventTap,
     options: MacOptions,
+    /// The child processes of jobs, which Quit stops.
+    children: Children,
 }
 
 impl MacPlatform {
@@ -85,6 +89,7 @@ impl MacPlatform {
             log,
             tap,
             options,
+            children: Children::new(),
         })
     }
 }
@@ -102,12 +107,27 @@ impl Platform for MacPlatform {
     }
 
     fn executor(&self) -> Arc<dyn OperationExecutor> {
-        Arc::new(UnavailableExecutor)
+        info!(zip_backend = ?self.options.zip_backend, "executor ready");
+        Arc::new(MacExecutor::new(
+            self.options.zip_backend,
+            self.children.clone(),
+            self.options.job_pauses,
+        ))
     }
 
     fn file_name_policy(&self) -> FileNamePolicy {
         // Finder shows ':' as '/'.
         FileNamePolicy::UNIVERSAL.forbidding(&[':'])
+    }
+
+    fn supported_actions(&self) -> &'static [ActionId] {
+        // Stage 8 brings the image actions back, stage 9 Rename.
+        &[
+            ActionId::CopyPath,
+            ActionId::ShowInfo,
+            ActionId::Reveal,
+            ActionId::ArchiveZip,
+        ]
     }
 
     fn views(&mut self) -> Views {
@@ -143,6 +163,7 @@ impl Platform for MacPlatform {
             log,
             tap,
             options,
+            children: _,
         } = self;
         let sink: Arc<dyn EventSink> = Arc::new(sender);
         let app = NSApplication::sharedApplication(mtm);

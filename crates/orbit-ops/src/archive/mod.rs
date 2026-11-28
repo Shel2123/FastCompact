@@ -99,9 +99,17 @@ pub fn archive_zip(
     }
 }
 
+/// Checks that `spec` is a job [`archive_zip`] can run, before any work.
+///
 /// The controller only starts ZIP jobs for available targets with name
-/// candidates; anything else is a fault of Orbit.
-fn check(spec: &JobSpec) -> Result<(), JobError> {
+/// candidates, so anything else is a fault of Orbit. A platform backend that
+/// archives another way checks its jobs with this too.
+///
+/// # Errors
+///
+/// [`JobError::Internal`] when `spec` is not a ZIP job, its target can't be
+/// archived or its destination is not a list of name candidates.
+pub fn check(spec: &JobSpec) -> Result<(), JobError> {
     if spec.operation != OperationSpec::ArchiveZip {
         return Err(JobError::Internal(format!(
             "{:?} is not a ZIP job",

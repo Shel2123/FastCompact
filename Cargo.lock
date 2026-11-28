@@ -418,6 +418,7 @@ dependencies = [
  "objc2-quartz-core",
  "orbit-app",
  "orbit-domain",
+ "orbit-ops",
  "orbit-runtime",
  "tempfile",
  "thiserror",
